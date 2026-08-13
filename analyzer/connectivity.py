@@ -762,8 +762,15 @@ def compare_stack_to_evidence(stack: dict[str, Any],
 
 def extract_nets(gds_path: str | Path, layermap: dict[str, Any] | None,
                  stack: dict[str, Any], max_shapes: int = 200_000,
-                 role_overrides: dict[str, str] | None = None) -> dict[str, Any]:
-    """Build the physical net graph using a supplied connection stack."""
+                 role_overrides: dict[str, str] | None = None,
+                 collect_shapes: bool = False) -> dict[str, Any]:
+    """Build the physical net graph using a supplied connection stack.
+
+    `collect_shapes` additionally returns each net's polygons. It is off by default
+    because the metadata handed to a model does not need them and they would bloat
+    the digest; the viewer asks for them so it can highlight a net, which is what
+    KLayout's net tracer does.
+    """
     import klayout.db as db
     roles = layer_roles(layermap, role_overrides)
     # Two or more, not exactly two: a via named for one endpoint pair can still
@@ -818,6 +825,7 @@ def extract_nets(gds_path: str | Path, layermap: dict[str, Any] | None,
         for net in circuit.each_net():
             per_layer: dict[str, int] = {}
             area = 0.0
+            outlines: list[dict[str, Any]] = []
             for key, lay in made.items():
                 shapes = l2n.shapes_of_net(net, lay, True)
                 count = shapes.count() if shapes else 0
@@ -825,6 +833,18 @@ def extract_nets(gds_path: str | Path, layermap: dict[str, Any] | None,
                     nm = roles.get(key, {}).get("name", f"layer_{key[0]}")
                     per_layer[nm] = per_layer.get(nm, 0) + count
                     area += float(shapes.area()) * dbu * dbu
+                    # The polygons themselves, so a viewer can highlight the net.
+                    # The count was already being read off this region and the
+                    # geometry thrown away; keeping it is what makes net tracing
+                    # possible without a second extraction.
+                    if collect_shapes:
+                        for poly in shapes.each():
+                            outlines.append({
+                                "layer": nm,
+                                "outline_um": [[round(pt.x * dbu, 6),
+                                                round(pt.y * dbu, 6)]
+                                               for pt in poly.to_simple_polygon().each_point()],
+                            })
             if not per_layer:
                 continue
             names = sorted(per_layer)
@@ -835,6 +855,7 @@ def extract_nets(gds_path: str | Path, layermap: dict[str, Any] | None,
                 "shapes_per_layer": per_layer, "area_um2": round(area, 9),
                 "spans_multiple_layers": len(names) > 1,
                 "uses_connector": bool(set(names) & connector_names),
+                **({"shapes": outlines} if collect_shapes else {}),
             })
     nets.sort(key=lambda n: (-n["shape_count"], n["net"]))
 

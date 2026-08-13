@@ -96,6 +96,24 @@ html, body {
 
 .gv-slider { width: 78px; accent-color: var(--gv-accent); cursor: pointer; }
 
+.gv-find {
+  width: 112px;
+  height: 27px;
+  padding: 0 8px;
+  font: 11px ui-monospace, monospace;
+  color: var(--gv-text);
+  background: #131c25;
+  border: 1px solid #26333f;
+  border-radius: 6px;
+  outline: none;
+}
+.gv-find:focus { border-color: var(--gv-accent); }
+.gv-fcount {
+  min-width: 42px;
+  font: 10px ui-monospace, monospace;
+  color: var(--gv-dim);
+}
+
 /* ---- body ---- */
 
 .gv-body { display: flex; flex: 1 1 auto; min-height: 0; }
@@ -304,3 +322,127 @@ kbd {
 .gv-mrow b { color: #f0b429; }
 .gv-dim { color: var(--gv-dim); }
 .gv-hint { color: var(--gv-dim); line-height: 1.6; }
+
+/* ---- tabs, marker browser, net list, toasts ---- */
+
+.gv-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--gv-line);
+  flex: 0 0 auto;
+}
+.gv-tab {
+  flex: 1;
+  padding: 8px 2px;
+  font-size: 10.5px;
+  color: var(--gv-dim);
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+.gv-tab:hover { color: var(--gv-text); background: #16202b; }
+.gv-tab.gv-on { color: #dce9ff; border-bottom-color: var(--gv-accent); }
+.gv-tab .gv-n { color: var(--gv-dim); }
+
+.gv-pbody { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+
+.gv-check {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  color: var(--gv-dim);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.gv-check input { accent-color: var(--gv-accent); margin: 0; }
+
+/* One marker row. The dot carries the status colour so the list scans at a glance;
+   unvisited rows are brighter, the way an unread message is. */
+.gv-mkr {
+  display: grid;
+  grid-template-columns: 8px 46px 1fr auto;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 5px;
+  font-size: 11px;
+  cursor: pointer;
+  color: var(--gv-dim);
+}
+.gv-mkr:hover { background: #16202b; }
+.gv-mkr.gv-soloed { background: rgba(88,166,255,.13); }
+/* A net row has no status dot, so it needs its own columns - reusing the marker
+   grid pushed the net name into the 8px dot column and it overlapped the layers. */
+.gv-mkr.gv-net { grid-template-columns: 34px 1fr auto; }
+.gv-mkr.gv-cell { grid-template-columns: 26px 1fr auto; }
+
+/* Difference rows carry the XOR side in the dot, matching the colours drawn on
+   the canvas: red is only-in-A, green only-in-B. */
+.gv-mkr.gv-diff { grid-template-columns: 8px 62px 1fr auto; }
+.gv-side-a .gv-dot { background: #d62728; }
+.gv-side-b .gv-dot { background: #2ca02c; }
+
+.gv-dsum {
+  padding: 8px 11px 6px;
+  border-bottom: 1px solid var(--gv-line);
+  font-size: 11.5px;
+}
+.gv-mkr.gv-cell .gv-mid { color: var(--gv-dim); }
+
+/* The hierarchy-depth control, KLayout's levels box. */
+.gv-depth {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 2px 9px 6px;
+  font-size: 11px;
+}
+.gv-depth .gv-slider { flex: 1; width: auto; }
+.gv-depth b { font: 10px ui-monospace, monospace; }
+.gv-mkr.gv-unvisited { color: var(--gv-text); font-weight: 600; }
+.gv-mkr.gv-waived { opacity: .45; text-decoration: line-through; }
+.gv-dot { width: 8px; height: 8px; border-radius: 50%; background: #3d4a58; }
+.gv-st-violation .gv-dot { background: #f85149; }
+.gv-st-pass .gv-dot { background: #3fb950; }
+.gv-st-not-checked .gv-dot { background: #d29922; }
+.gv-st-not-applicable .gv-dot { background: #4d5b6b; }
+.gv-mid { font: 10px ui-monospace, monospace; color: var(--gv-text); }
+.gv-mrule { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gv-mst { font-size: 9.5px; text-transform: uppercase; letter-spacing: .04em; }
+/* Uppercasing a unit is wrong: "µm²" becomes "MM²", which is a different unit. */
+.gv-diff .gv-mst, .gv-net .gv-mst, .gv-cell .gv-mst {
+  text-transform: none;
+  font: 10px ui-monospace, monospace;
+}
+.gv-mtext { font-size: 11px; line-height: 1.5; margin: 2px 0 5px; }
+
+.gv-x {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--gv-dim);
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.gv-x:hover { color: #f85149; background: #241a1c; }
+
+.gv-toast {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  max-width: 82%;
+  padding: 7px 13px;
+  font-size: 11.5px;
+  color: #dce9ff;
+  background: rgba(13,22,32,.96);
+  border: 1px solid #2f5d94;
+  border-radius: 7px;
+  z-index: 9;
+  box-shadow: 0 6px 20px rgba(0,0,0,.5);
+}

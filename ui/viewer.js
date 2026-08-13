@@ -63,14 +63,26 @@
     return r.replace(/\.?0+$/, "") + " nm";
   }
 
+  // Areas at this scale are nanometre-squared: a 20 × 25 nm region is 500 nm², and
+  // writing it as 0.0005000 µm² makes a reader count zeros to compare two rows.
+  // Cell-scale figures stay in µm² so they read the same as the report beside them.
   function fmtArea(um2) {
     if (um2 === 0) return "0";
-    if (Math.abs(um2) < 1e-4) return (um2 * 1e6).toPrecision(4) + " nm²";
+    if (Math.abs(um2) < 0.01) {
+      return String(Number((um2 * 1e6).toPrecision(4))) + " nm²";
+    }
     return um2.toPrecision(4) + " µm²";
   }
 
   function fmtCoord(um) {
     return (um * 1000).toFixed(1).replace(/\.0$/, "");
+  }
+
+  // File names in a 232px panel: the extension is noise and the stem is what
+  // distinguishes two uploads. The full name is always in the row's tooltip.
+  function shortName(name) {
+    const stem = String(name || "").replace(/\.[^.]+$/, "");
+    return stem.length > 14 ? stem.slice(0, 13) + "…" : stem;
   }
 
   // A "nice" step for the grid: 1, 2 or 5 times a power of ten, chosen so the
@@ -109,6 +121,11 @@
     save:   I('<path d="M10 3v9M6.5 8.5L10 12l3.5-3.5M4 15h12"/>'),
     swipe:  I('<rect x="3" y="4" width="14" height="12" rx="1"/><path d="M10 4v12"/>'),
     blink:  I('<circle cx="10" cy="10" r="6"/><path d="M10 4a6 6 0 010 12z" fill="currentColor" stroke="none"/>'),
+    net:    I('<circle cx="5" cy="5" r="2"/><circle cx="15" cy="5" r="2"/><circle cx="10" cy="15" r="2"/><path d="M5 7v3h10V7M10 10v3"/>'),
+    tracks: I('<path d="M3 5h14M3 10h14M3 15h14"/><path d="M7 3v14" opacity=".5"/>'),
+    bookmark: I('<path d="M6 3h8v14l-4-3-4 3z"/>'),
+    share:  I('<path d="M12 3h5v5M17 3l-7 7M8 5H4v11h11v-4"/>'),
+    step:   I('<path d="M7 4l6 6-6 6"/>'),
   };
 
 
@@ -172,6 +189,34 @@
       this.blinkShowA = true;
       this.history = [];
       this.historyIndex = -1;
+      this.markers = payload.markers || (this.A && this.A.markers) || [];
+      this.nets = payload.nets || (this.A && this.A.nets) || [];
+      this.tracks = payload.tracks || (this.A && this.A.tracks) || {};
+      this.tree = payload.tree || (this.A && this.A.tree) || {};
+      // Instance boundaries start hidden and the depth limit starts at the whole
+      // tree: KLayout opens at full depth too, and a box drawn round every cell
+      // before the user asked for it is just another layer of clutter.
+      this.cellBoxesOn = false;
+      this.depthLimit = this.tree.maxDepth || 0;
+      this.activePlacement = null;
+      this.activeCell = null;
+      this.visited = new Set();
+      this.waived = {};
+      this.activeMarker = null;
+      this.netHighlight = null;
+      this.traceLock = false;
+      this.probeA = null;
+      this.tracksOn = false;
+      this.bookmarks = [];
+      this.presets = [];
+      this.activeRegion = null;
+      this.visitedRegions = new Set();
+      this.findQuery = "";
+      this.findHits = [];
+      this.findIndex = -1;
+      // A comparison opens on the differences: that is the question it was opened
+      // to answer, and the layer list is one click away.
+      this.tab = this.compare ? "diffs" : "layers";
 
       this.build();
       this.fit(false);
@@ -271,6 +316,7 @@
         ["ruler", ICON.ruler, "Ruler — click twice to measure, snaps to edges (R)"],
         ["area", ICON.area, "Area box — drag to measure a region (A)"],
         ["probe", ICON.probe, "Probe — click a shape for its full properties (P)"],
+        ["net", ICON.net, "Trace net — click a shape to highlight everything joined to it (N)"],
       ];
       for (const [mode, icon, title] of modes) {
         this.modeButtons[mode] = this.button(tools, icon, title, () => this.setMode(mode));
@@ -290,6 +336,10 @@
       this.btnFill = this.button(disp, ICON.fill, "Filled / outline only (O)", () => {
         this.fillOn = !this.fillOn; this.sync(); this.draw();
       });
+      this.btnTracks = this.button(disp, ICON.tracks,
+        "Routing grid — the track centres from the track-guide layers (T)", () => {
+          this.tracksOn = !this.tracksOn; this.sync(); this.draw();
+        });
 
       const op = document.createElement("input");
       op.type = "range"; op.min = "10"; op.max = "100"; op.value = String(this.opacity * 100);
@@ -313,8 +363,32 @@
         }
       }
 
+      // Find shapes by their measured size. KLayout answers "which wires are
+      // narrower than 21 nm?" by writing a DRC script; here it is a query over the
+      // dimensions the analyzer already measured, so the answer is the same number
+      // the report quotes.
+      const find = this.group(t, "Find");
+      this.findInput = document.createElement("input");
+      this.findInput.type = "search";
+      this.findInput.className = "gv-find";
+      this.findInput.placeholder = "w<21, h>50, a<300…";
+      this.findInput.title = "Find shapes by measured size: w, h or a (area), " +
+                             "with < > or =, in nm. Enter steps through the hits.";
+      this.findInput.addEventListener("input", () => this.runFind(this.findInput.value));
+      this.findInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); this.stepFind(e.shiftKey ? -1 : 1); }
+        if (e.key === "Escape") { this.findInput.value = ""; this.runFind(""); }
+      });
+      find.appendChild(this.findInput);
+      this.findCount = document.createElement("span");
+      this.findCount.className = "gv-fcount";
+      find.appendChild(this.findCount);
+      this.button(find, ICON.fwd, "Next match (Enter)", () => this.stepFind(1));
+
       const out = this.group(t, "");
       this.button(out, ICON.save, "Save this view as a PNG", () => this.exportPNG());
+      this.button(out, ICON.bookmark, "Bookmark this view", () => this.addBookmark());
+      this.button(out, ICON.share, "Copy a link to exactly this view", () => this.copyState());
       if (this.opts.onEvent) {
         this.button(out, "⤢ Expand", "Open the full-screen workspace", () => {
           this.opts.onEvent({ type: "expand" });
@@ -326,44 +400,93 @@
       const p = this.panel;
       p.innerHTML = "";
 
-      const head = document.createElement("div");
-      head.className = "gv-phead";
-      head.innerHTML = `<span>Layers</span><span class="gv-count">${this.A.layers.length}</span>`;
-      p.appendChild(head);
+      // Tabs, because a review needs several different lists and stacking them all
+      // in one column means scrolling past the layers to reach a violation.
+      this.tabBar = document.createElement("div");
+      this.tabBar.className = "gv-tabs";
+      p.appendChild(this.tabBar);
+      // A comparison has different questions: the rule and net lists belong to one
+      // layout, and an empty tab is worse than no tab. What replaces them is the
+      // difference browser, which is the whole point of the view.
+      const tabs = this.compare
+        ? [["diffs", "Diffs", (this.data.regions || []).length],
+           ["layers", "Layers", this.A.layers.length],
+           ["views", "Views", ""]]
+        : [["layers", "Layers", this.A.layers.length],
+           ["markers", "Rules", this.markers.length],
+           ["nets", "Nets", this.nets.length],
+           ["cells", "Cells", (this.tree.cells || []).length],
+           ["views", "Views", ""]];
+      this.tabButtons = {};
+      for (const [id, label, count] of tabs) {
+        const b = document.createElement("button");
+        b.className = "gv-tab";
+        b.type = "button";
+        b.innerHTML = label + (count === "" ? "" : ` <span class="gv-n">${count}</span>`);
+        b.addEventListener("click", () => { this.tab = id; this.renderPanel(); });
+        this.tabBar.appendChild(b);
+        this.tabButtons[id] = b;
+      }
 
+      this.panelBody = document.createElement("div");
+      this.panelBody.className = "gv-pbody";
+      p.appendChild(this.panelBody);
+
+      this.info = document.createElement("div");
+      this.info.className = "gv-info";
+      p.appendChild(this.info);
+
+      this.renderPanel();
+    }
+
+    renderPanel() {
+      for (const id in this.tabButtons) {
+        this.tabButtons[id].classList.toggle("gv-on", this.tab === id);
+      }
+      this.panelBody.innerHTML = "";
+      // Buttons living in the panel body are replaced on every render, so the
+      // handles must not outlive them - sync() would otherwise style a node that
+      // is no longer on the page.
+      this.btnCellBoxes = null;
+      if (this.tab === "layers") this.renderLayersTab();
+      else if (this.tab === "markers") this.renderMarkersTab();
+      else if (this.tab === "nets") this.renderNetsTab();
+      else if (this.tab === "cells") this.renderCellsTab();
+      else if (this.tab === "diffs") this.renderDiffsTab();
+      else this.renderViewsTab();
+      this.sync();
+    }
+
+    renderLayersTab() {
       const quick = document.createElement("div");
       quick.className = "gv-quick";
-      p.appendChild(quick);
+      this.panelBody.appendChild(quick);
       this.button(quick, "All", "Show every layer", () => {
         this.visible = new Set(this.A.layers.map((l) => l.name));
-        this.solo = null; this.syncPanel(); this.draw();
+        this.solo = null; this.renderPanel(); this.draw();
       });
       this.button(quick, "Drawing", "Only the layers with unique geometry", () => {
         this.visible = new Set(this.A.defaultOn);
-        this.solo = null; this.syncPanel(); this.draw();
+        this.solo = null; this.renderPanel(); this.draw();
       });
       this.button(quick, "None", "Hide every layer", () => {
-        this.visible = new Set(); this.solo = null; this.syncPanel(); this.draw();
+        this.visible = new Set(); this.solo = null; this.renderPanel(); this.draw();
       });
 
       const search = document.createElement("input");
       search.type = "search";
       search.placeholder = "Filter layers…";
       search.className = "gv-search";
+      search.value = this.filter || "";
       search.addEventListener("input", () => {
         this.filter = search.value.trim().toLowerCase();
         this.syncPanel();
       });
-      p.appendChild(search);
+      this.panelBody.appendChild(search);
 
       this.layerList = document.createElement("div");
       this.layerList.className = "gv-layers";
-      p.appendChild(this.layerList);
-
-      this.info = document.createElement("div");
-      this.info.className = "gv-info";
-      p.appendChild(this.info);
-
+      this.panelBody.appendChild(this.layerList);
       this.renderLayerRows();
     }
 
@@ -437,7 +560,677 @@
       this.syncPanel();
     }
 
+    // ---- marker browser (KLayout calls this RVE) ----
+
+    renderMarkersTab() {
+      if (!this.markers.length) {
+        this.panelBody.innerHTML =
+          '<div class="gv-hint">No rule results. Design rule checking needs the ' +
+          'design rule manual catalogue, which is not in this repository.</div>';
+        return;
+      }
+      const bar = document.createElement("div");
+      bar.className = "gv-quick";
+      this.panelBody.appendChild(bar);
+      this.button(bar, "◀", "Previous result (Shift+N)", () => this.stepMarker(-1));
+      this.button(bar, "▶", "Next result (N)", () => this.stepMarker(1));
+      const only = document.createElement("label");
+      only.className = "gv-check";
+      only.innerHTML = '<input type="checkbox"> failures only';
+      const box = only.querySelector("input");
+      box.checked = !!this.failuresOnly;
+      box.addEventListener("change", () => {
+        this.failuresOnly = box.checked;
+        this.renderPanel();
+      });
+      bar.appendChild(only);
+
+      const list = document.createElement("div");
+      list.className = "gv-layers";
+      this.panelBody.appendChild(list);
+      this.markerRows = {};
+      for (const m of this.visibleMarkers()) {
+        const row = document.createElement("div");
+        row.className = "gv-mkr gv-st-" + m.status.replace(/\s+/g, "-");
+        row.dataset.id = m.id;
+        if (!this.visited.has(m.id)) row.classList.add("gv-unvisited");
+        if (this.waived[m.id]) row.classList.add("gv-waived");
+        row.innerHTML =
+          `<span class="gv-dot"></span>` +
+          `<span class="gv-mid">${m.id}</span>` +
+          `<span class="gv-mrule">${m.rule ? m.rule.slice(0, 90) : ""}</span>` +
+          `<span class="gv-mst">${m.status}</span>`;
+        row.title = (m.detail || "") + (m.layers.length ? `\nlayers: ${m.layers.join(", ")}` : "");
+        row.addEventListener("click", () => this.showMarker(m));
+        list.appendChild(row);
+        this.markerRows[m.id] = row;
+      }
+    }
+
+    visibleMarkers() {
+      return this.failuresOnly
+        ? this.markers.filter((m) => m.status === "violation")
+        : this.markers;
+    }
+
+    // Cross-probe: isolate the layers the check actually read and fit the view to
+    // them. This is the step that turns a rule result into something you can look
+    // at - the reviewer's alternative is typing coordinates by hand.
+    showMarker(marker) {
+      this.activeMarker = marker;
+      this.visited.add(marker.id);
+      this.tab = "markers";
+      if (marker.layers && marker.layers.length) {
+        const present = marker.layers.filter(
+          (n) => this.A.layers.some((l) => l.name === n));
+        if (present.length) {
+          if (!this.solo) this.savedVisible = new Set(this.visible);
+          this.visible = new Set(present);
+          this.solo = null;
+          this.zoomToLayers(present);
+        }
+      }
+      this.renderPanel();
+      this.draw();
+    }
+
+    stepMarker(step) {
+      const list = this.visibleMarkers();
+      if (!list.length) return;
+      let i = this.activeMarker ? list.findIndex((m) => m.id === this.activeMarker.id) : -1;
+      i = (i + step + list.length) % list.length;
+      this.showMarker(list[i]);
+      const row = this.markerRows && this.markerRows[list[i].id];
+      if (row && row.scrollIntoView) row.scrollIntoView({ block: "nearest" });
+    }
+
+    zoomToLayers(names) {
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (const layer of this.A.layers) {
+        if (!names.includes(layer.name)) continue;
+        for (const s of layer.shapes) {
+          const [a, b, c, d] = polyBBox(s.o);
+          x0 = Math.min(x0, a); y0 = Math.min(y0, b);
+          x1 = Math.max(x1, c); y1 = Math.max(y1, d);
+        }
+      }
+      if (x1 > x0 && y1 > y0) {
+        const padX = (x1 - x0) * 0.25 + 0.002, padY = (y1 - y0) * 0.25 + 0.002;
+        this.zoomToBox(x0 - padX, y0 - padY, x1 + padX, y1 + padY);
+      }
+    }
+
+    // ---- nets ----
+
+    renderNetsTab() {
+      if (!this.nets.length) {
+        this.panelBody.innerHTML =
+          '<div class="gv-hint">No net graph. Nets need a connection stack — the one ' +
+          'thing a .gds and .lyp cannot supply, because GDSII stores no layer ' +
+          'elevations.</div>';
+        return;
+      }
+      const bar = document.createElement("div");
+      bar.className = "gv-quick";
+      this.panelBody.appendChild(bar);
+      this.button(bar, "Clear", "Stop highlighting", () => {
+        this.netHighlight = null; this.probeA = null; this.renderPanel(); this.draw();
+      });
+      const lock = document.createElement("label");
+      lock.className = "gv-check";
+      lock.innerHTML = '<input type="checkbox"> keep trace tool armed';
+      const lb = lock.querySelector("input");
+      lb.checked = this.traceLock;
+      lb.addEventListener("change", () => { this.traceLock = lb.checked; });
+      bar.appendChild(lock);
+
+      const list = document.createElement("div");
+      list.className = "gv-layers";
+      this.panelBody.appendChild(list);
+      for (const net of this.nets) {
+        const row = document.createElement("div");
+        row.className = "gv-mkr gv-net";
+        if (this.netHighlight && this.netHighlight.net === net.net) row.classList.add("gv-soloed");
+        row.innerHTML =
+          `<span class="gv-mid">${net.net}</span>` +
+          `<span class="gv-mrule">${net.layers.join(", ")}</span>` +
+          `<span class="gv-mst">${net.shapeCount} shp</span>`;
+        row.title = `${net.shapeCount} shape(s) across ${net.layers.length} layer(s), ` +
+                    `area ${fmtArea(net.area)}` +
+                    (net.provisional ? " — provisional: rests on an inferred stack" : "");
+        row.addEventListener("click", () => this.highlightNet(net, true));
+        list.appendChild(row);
+      }
+    }
+
+    highlightNet(net, zoom) {
+      this.netHighlight = net;
+      // Showing every layer the net touches, or its shapes would be hidden behind
+      // whichever layers happened to be off.
+      for (const name of net.layers) this.visible.add(name);
+      this.solo = null;
+      if (zoom) {
+        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+        for (const s of net.shapes) {
+          const [a, b, c, d] = polyBBox(s.o);
+          x0 = Math.min(x0, a); y0 = Math.min(y0, b);
+          x1 = Math.max(x1, c); y1 = Math.max(y1, d);
+        }
+        if (x1 > x0) {
+          const px = (x1 - x0) * 0.2 + 0.002, py = (y1 - y0) * 0.2 + 0.002;
+          this.zoomToBox(x0 - px, y0 - py, x1 + px, y1 + py);
+        }
+      }
+      this.tab = "nets";
+      this.renderPanel();
+      this.draw();
+    }
+
+    // Which net owns the shape under this point. Matched on geometry rather than on
+    // an id, because the net extraction merges touching shapes and so does not hand
+    // back the same polygon objects the layer list holds.
+    netAt(wxp, wyp) {
+      for (const net of this.nets) {
+        for (const s of net.shapes) {
+          if (pointInPoly(wxp, wyp, s.o)) return net;
+        }
+      }
+      return null;
+    }
+
+    traceAt(wxp, wyp, second) {
+      const net = this.netAt(wxp, wyp);
+      if (second) {
+        // Two-point connectivity: the question a reviewer actually asks is "are
+        // these two things on the same net?", and a yes/no beats two highlights.
+        this.probeB = net;
+        this.sync();
+        this.draw();
+        return;
+      }
+      this.probeA = net;
+      this.probeB = null;
+      if (net) this.highlightNet(net, false);
+      else { this.netHighlight = null; this.renderPanel(); this.draw(); }
+    }
+
+    // ---- find shapes by measured size ----
+
+    // Query forms: `w<21`, `h>=50`, `a<300`, `<21` (either side), `20` (either side
+    // exactly 20 nm). Lengths in nanometres, areas in square nanometres, because
+    // those are the units the numbers are quoted in everywhere else here.
+    parseFind(text) {
+      const m = String(text || "").trim().toLowerCase()
+        .match(/^([wha])?\s*(<=|>=|<|>|=)?\s*([0-9]*\.?[0-9]+)$/);
+      if (!m) return null;
+      return { dim: m[1] || "any", op: m[2] || "=", value: parseFloat(m[3]) };
+    }
+
+    runFind(text) {
+      this.findQuery = text;
+      const q = this.parseFind(text);
+      this.findHits = [];
+      this.findIndex = -1;
+      if (q) {
+        const test = (value) => {
+          // A 0.05 nm database unit means an exact match has to tolerate the grid,
+          // or `w=21` finds nothing on a shape measured 21.000000000000004 nm.
+          if (q.op === "=") return Math.abs(value - q.value) < 0.025;
+          if (q.op === "<") return value < q.value;
+          if (q.op === "<=") return value <= q.value;
+          if (q.op === ">") return value > q.value;
+          return value >= q.value;
+        };
+        for (const layer of this.orderedLayers()) {
+          for (const s of layer.shapes) {
+            const w = s.w * 1000, h = s.h * 1000, a = s.a * 1e6;
+            const hit = q.dim === "w" ? test(w)
+                      : q.dim === "h" ? test(h)
+                      : q.dim === "a" ? test(a)
+                      : (test(w) || test(h));
+            if (hit) this.findHits.push({ layer: layer.name, colour: layer.colour,
+                                          ld: `${layer.layer}/${layer.datatype}`, shape: s });
+          }
+        }
+      }
+      if (this.findCount) {
+        this.findCount.textContent = !text ? ""
+          : q ? `${this.findHits.length} hit${this.findHits.length === 1 ? "" : "s"}`
+          : "?";
+        this.findCount.title = q ? "" : "Try w<21, h>50 or a<300 (nanometres)";
+      }
+      this.draw();
+    }
+
+    stepFind(step) {
+      if (!this.findHits.length) return;
+      this.findIndex = (this.findIndex + step + this.findHits.length) % this.findHits.length;
+      const hit = this.findHits[this.findIndex];
+      const s = hit.shape;
+      // Enough padding to see what the shape sits next to. Note this can zoom
+      // *out*: a hit taller than the current view has to fit on screen to be
+      // looked at, and half a highlighted shape is not an answer.
+      this.zoomToBoxPadded([s.x, s.y, s.x + s.w, s.y + s.h], 0.6);
+      // Selecting it puts the measured numbers in the panel, so a hit is never a
+      // highlight without a figure beside it.
+      this.selection = hit;
+      this.sync();
+      this.draw();
+    }
+
+    drawFindHits(ctx) {
+      ctx.save();
+      ctx.lineWidth = 2;
+      for (let i = 0; i < this.findHits.length; i++) {
+        const s = this.findHits[i].shape;
+        const x = this.sx(s.x), y = this.sy(s.y + s.h);
+        const w = this.sx(s.x + s.w) - x, h = this.sy(s.y) - y;
+        const current = i === this.findIndex;
+        ctx.strokeStyle = current ? "#7ee787" : "rgba(126,231,135,0.65)";
+        ctx.setLineDash(current ? [] : [3, 2]);
+        ctx.strokeRect(x - 1.5, y - 1.5, w + 3, h + 3);
+      }
+      ctx.restore();
+    }
+
+    // ---- difference browser (the comparison's marker list) ----
+
+    // Largest first, because "what changed?" is answered by the biggest region and
+    // a list in file order buries it. Every row is clickable: the region is what a
+    // reviewer wants on screen, and finding it by eye in a wipe is the slow way.
+    renderDiffsTab() {
+      const regions = this.data.regions || [];
+      const summary = this.data.summary || {};
+      const names = this.data.names || { a: "A", b: "B" };
+
+      const head = document.createElement("div");
+      head.className = "gv-dsum";
+      head.innerHTML =
+        `<div class="gv-irow"><span>Differing regions</span><b>${regions.length}</b></div>` +
+        `<div class="gv-irow"><span>Layers changed</span><b>${summary.layersChanged ?? "-"} / ` +
+        `${summary.layersCompared ?? "-"}</b></div>` +
+        (summary.xorAreaUm2 != null
+          ? `<div class="gv-irow"><span>XOR area</span><b>${fmtArea(summary.xorAreaUm2)}</b></div>` : "") +
+        (summary.removedAreaUm2 != null
+          ? `<div class="gv-irow"><span>Only in ${names.a}</span><b>${fmtArea(summary.removedAreaUm2)}</b></div>` : "") +
+        (summary.addedAreaUm2 != null
+          ? `<div class="gv-irow"><span>Only in ${names.b}</span><b>${fmtArea(summary.addedAreaUm2)}</b></div>` : "");
+      this.panelBody.appendChild(head);
+
+      if (!regions.length) {
+        const hint = document.createElement("div");
+        hint.className = "gv-hint";
+        hint.style.padding = "8px 10px";
+        hint.textContent = "No geometric difference on any compared layer. " +
+          "The two layouts are identical where they overlap.";
+        this.panelBody.appendChild(hint);
+        return;
+      }
+
+      const bar = document.createElement("div");
+      bar.className = "gv-quick";
+      this.panelBody.appendChild(bar);
+      this.button(bar, "◀", "Previous difference (Shift+N)", () => this.stepRegion(-1));
+      this.button(bar, "▶", "Next difference (N)", () => this.stepRegion(1));
+      this.button(bar, "Fit all", "Frame every difference", () => {
+        this.activeRegion = null;
+        this.zoomToRegions(regions);
+        this.renderPanel();
+      });
+
+      const list = document.createElement("div");
+      list.className = "gv-layers";
+      this.panelBody.appendChild(list);
+      this.regionRows = {};
+      for (const r of this.orderedRegions()) {
+        const row = document.createElement("div");
+        row.className = "gv-mkr gv-diff gv-side-" + r.side;
+        if (this.activeRegion === r) row.classList.add("gv-soloed");
+        if (!this.visitedRegions.has(this.regionKey(r))) row.classList.add("gv-unvisited");
+        row.innerHTML =
+          `<span class="gv-dot"></span>` +
+          `<span class="gv-mid">${r.layer}</span>` +
+          // − and + rather than "only in": the panel is 232px wide, and the file
+          // name is what has to survive the truncation, not the preposition.
+          `<span class="gv-mrule">${r.side === "a" ? "−" : "+"} ` +
+          `${shortName(r.side === "a" ? names.a : names.b)}</span>` +
+          `<span class="gv-mst">${fmtArea(r.a)}</span>`;
+        row.title = `${r.layer} · only in ${r.side === "a" ? names.a : names.b} · ` +
+                    `area ${fmtArea(r.a)}`;
+        row.addEventListener("click", () => this.showRegion(r));
+        list.appendChild(row);
+        this.regionRows[this.regionKey(r)] = row;
+      }
+    }
+
+    regionKey(r) {
+      return `${r.layer}|${r.side}|${r.o[0][0]},${r.o[0][1]}`;
+    }
+
+    orderedRegions() {
+      return (this.data.regions || []).slice().sort((p, q) => (q.a || 0) - (p.a || 0));
+    }
+
+    showRegion(region) {
+      this.activeRegion = region;
+      this.visitedRegions.add(this.regionKey(region));
+      this.visible.add(region.layer);
+      // A difference cannot be looked at in single-layout mode, and "only in A"
+      // means nothing when B is what is drawn.
+      if (this.compareMode === "a" || this.compareMode === "b") {
+        this.setCompareMode("overlay");
+      }
+      this.zoomToRegions([region]);
+      this.tab = "diffs";
+      this.renderPanel();
+      this.draw();
+    }
+
+    stepRegion(step) {
+      const list = this.orderedRegions();
+      if (!list.length) return;
+      let i = this.activeRegion ? list.indexOf(this.activeRegion) : -1;
+      i = (i + step + list.length) % list.length;
+      this.showRegion(list[i]);
+      const row = this.regionRows && this.regionRows[this.regionKey(list[i])];
+      if (row && row.scrollIntoView) row.scrollIntoView({ block: "nearest" });
+    }
+
+    zoomToRegions(regions) {
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (const r of regions) {
+        const [a, b, c, d] = polyBBox(r.o);
+        x0 = Math.min(x0, a); y0 = Math.min(y0, b);
+        x1 = Math.max(x1, c); y1 = Math.max(y1, d);
+      }
+      // One region gets generous padding so its surroundings stay on screen; "fit
+       // all" is already framing the whole set and needs only a margin.
+      if (x1 > x0 || y1 > y0) {
+        this.zoomToBoxPadded([x0, y0, x1, y1], regions.length === 1 ? 2.5 : 0.15);
+      }
+    }
+
+    // ---- cell tree ----
+
+    // KLayout's cell list plus its hierarchy-depth control. The geometry here is
+    // drawn flattened, so limiting the depth cannot hide shapes the way it does in
+    // KLayout; what it does is decide how deep the instance boundaries go, which is
+    // the part that answers "which cell is this?" on a block you did not draw.
+    renderCellsTab() {
+      const tree = this.tree || {};
+      const cells = tree.cells || [];
+      if (!cells.length) {
+        this.panelBody.innerHTML =
+          '<div class="gv-hint">No cell list. The cell tree is read from the GDSII ' +
+          'file itself, so this only happens when the layout was not analysed.</div>';
+        return;
+      }
+
+      const bar = document.createElement("div");
+      bar.className = "gv-quick";
+      this.panelBody.appendChild(bar);
+      this.btnCellBoxes = this.button(bar, "Boxes", "Outline every instance (H)", () => {
+        this.cellBoxesOn = !this.cellBoxesOn;
+        this.renderPanel();
+        this.draw();
+      });
+      this.button(bar, "Fit top", "Fit the top cell", () => {
+        this.activePlacement = null;
+        this.activeCell = null;
+        this.fit(true);
+        this.renderPanel();
+      });
+
+      if ((tree.maxDepth || 0) > 0) {
+        const wrap = document.createElement("div");
+        wrap.className = "gv-depth";
+        wrap.innerHTML = `<span class="gv-dim">Levels</span>`;
+        const slider = document.createElement("input");
+        slider.type = "range";
+        slider.className = "gv-slider";
+        slider.min = "1";
+        slider.max = String(tree.maxDepth);
+        slider.value = String(this.depthLimit || tree.maxDepth);
+        const out = document.createElement("b");
+        out.textContent = slider.value + " / " + tree.maxDepth;
+        slider.addEventListener("input", () => {
+          this.depthLimit = parseInt(slider.value, 10);
+          out.textContent = slider.value + " / " + tree.maxDepth;
+          this.draw();
+        });
+        wrap.appendChild(slider);
+        wrap.appendChild(out);
+        this.panelBody.appendChild(wrap);
+      }
+
+      const list = document.createElement("div");
+      list.className = "gv-layers";
+      this.panelBody.appendChild(list);
+
+      // Definitions first: every cell in the file, top cell leading. Then the
+      // placements as a path tree, so a cell used twice is two rows you can visit.
+      const head = (text) => {
+        const h = document.createElement("div");
+        h.className = "gv-isec";
+        h.style.padding = "6px 6px 2px";
+        h.textContent = text;
+        list.appendChild(h);
+      };
+      head(cells.length === 1 ? "Cell" : `Cells (${cells.length})`);
+      for (const cell of cells) {
+        const row = document.createElement("div");
+        row.className = "gv-mkr gv-cell";
+        row.innerHTML =
+          `<span class="gv-mid">${cell.isTop ? "top" : ""}</span>` +
+          `<span class="gv-mrule">${cell.name}</span>` +
+          `<span class="gv-mst">${cell.shapes} shp</span>`;
+        row.title = `${cell.shapes} shape(s), ${cell.placements} instance placement(s), ` +
+                    `${cell.levels} level(s) below` +
+                    (cell.bbox ? `\nbbox ${fmtLen(cell.bbox[2] - cell.bbox[0])} × ` +
+                                 `${fmtLen(cell.bbox[3] - cell.bbox[1])}` : "");
+        row.addEventListener("click", () => this.showCell(cell));
+        list.appendChild(row);
+      }
+
+      const placements = tree.placements || [];
+      if (placements.length) {
+        head(`Placements (${placements.length}${tree.truncated ? "+" : ""})`);
+        for (const p of placements) {
+          const row = document.createElement("div");
+          row.className = "gv-mkr gv-cell";
+          if (this.activePlacement && this.activePlacement.id === p.id) {
+            row.classList.add("gv-soloed");
+          }
+          row.style.paddingLeft = (6 + (p.depth - 1) * 11) + "px";
+          row.innerHTML =
+            `<span class="gv-mid">L${p.depth}</span>` +
+            `<span class="gv-mrule">${p.cell}</span>` +
+            `<span class="gv-mst">${p.orient || ""}</span>`;
+          row.title = `${p.path}\nin ${p.parent}, ${p.orient}` +
+                      (p.bbox ? `\nat ${fmtCoord(p.bbox[0])}, ${fmtCoord(p.bbox[1])}` : "");
+          row.addEventListener("click", () => this.showPlacement(p));
+          list.appendChild(row);
+        }
+      } else {
+        const hint = document.createElement("div");
+        hint.className = "gv-hint";
+        hint.style.padding = "8px 8px 4px";
+        hint.textContent = tree.note ||
+          "This layout is flat: the top cell contains no instances.";
+        this.panelBody.appendChild(hint);
+      }
+    }
+
+    showCell(cell) {
+      this.activePlacement = null;
+      this.activeCell = cell;
+      if (cell.bbox) this.zoomToBoxPadded(cell.bbox);
+      this.tab = "cells";
+      this.renderPanel();
+      this.draw();
+    }
+
+    showPlacement(p) {
+      this.activePlacement = p;
+      this.activeCell = null;
+      this.cellBoxesOn = true;
+      if (p.bbox) this.zoomToBoxPadded(p.bbox);
+      this.tab = "cells";
+      this.renderPanel();
+      this.draw();
+    }
+
+    zoomToBoxPadded(bbox, pad) {
+      // The padding is context: a 20 nm region filling the screen tells you nothing
+      // about what it sits next to, which is the first thing you want to know.
+      const f = pad == null ? 0.25 : pad;
+      const [x0, y0, x1, y1] = bbox;
+      const px = (x1 - x0) * f + 0.002, py = (y1 - y0) * f + 0.002;
+      this.zoomToBox(x0 - px, y0 - py, x1 + px, y1 + py);
+    }
+
+    // ---- saved views and layer sets ----
+
+    renderViewsTab() {
+      const bar = document.createElement("div");
+      bar.className = "gv-quick";
+      this.panelBody.appendChild(bar);
+      this.button(bar, "Bookmark view", "Save the current zoom and pan", () => this.addBookmark());
+      this.button(bar, "Save layer set", "Save which layers are on", () => this.addPreset());
+
+      const list = document.createElement("div");
+      list.className = "gv-layers";
+      this.panelBody.appendChild(list);
+
+      const section = (label) => {
+        const el = document.createElement("div");
+        el.className = "gv-isec";
+        el.textContent = label;
+        list.appendChild(el);
+      };
+
+      section("Bookmarked views");
+      if (!this.bookmarks.length) {
+        const el = document.createElement("div");
+        el.className = "gv-hint";
+        el.textContent = "None yet. A bookmark returns to an exact zoom and position.";
+        list.appendChild(el);
+      }
+      this.bookmarks.forEach((bm, i) => {
+        const row = document.createElement("div");
+        row.className = "gv-mkr";
+        row.innerHTML = `<span class="gv-mid">${i + 1}</span>` +
+                        `<span class="gv-mrule">${bm.name}</span>` +
+                        `<span class="gv-mst">${fmtLen(1 / bm.scale)}/px</span>`;
+        row.addEventListener("click", () => {
+          this.scale = bm.scale; this.cx = bm.cx; this.cy = bm.cy;
+          this.pushHistory(); this.draw();
+        });
+        list.appendChild(row);
+      });
+
+      section("Layer sets");
+      this.presets.forEach((ps, i) => {
+        const row = document.createElement("div");
+        row.className = "gv-mkr";
+        row.innerHTML = `<span class="gv-mid">${i + 1}</span>` +
+                        `<span class="gv-mrule">${ps.name}</span>` +
+                        `<span class="gv-mst">${ps.layers.length}</span>`;
+        row.addEventListener("click", () => {
+          this.visible = new Set(ps.layers); this.solo = null;
+          this.renderPanel(); this.draw();
+        });
+        list.appendChild(row);
+      });
+
+      section("Share");
+      const share = document.createElement("div");
+      share.className = "gv-hint";
+      share.innerHTML =
+        'A view is just numbers, so it can be copied. <b>Copy view</b> puts the zoom, ' +
+        'position and layer set on the clipboard; paste it below to go back there — ' +
+        'including on someone else\'s machine.';
+      list.appendChild(share);
+      const row = document.createElement("div");
+      row.className = "gv-quick";
+      this.button(row, "Copy view", "Copy this exact view", () => this.copyState());
+      const input = document.createElement("input");
+      input.className = "gv-search";
+      input.placeholder = "paste a view here";
+      input.addEventListener("change", () => {
+        if (this.applyState(input.value)) input.value = "";
+      });
+      list.appendChild(row);
+      list.appendChild(input);
+    }
+
+    addBookmark() {
+      const name = "View " + (this.bookmarks.length + 1) +
+        " · " + fmtLen(1 / this.scale) + "/px";
+      this.bookmarks.push({ name, scale: this.scale, cx: this.cx, cy: this.cy });
+      this.tab = "views";
+      this.renderPanel();
+    }
+
+    addPreset() {
+      const layers = Array.from(this.visible);
+      this.presets.push({ name: `Set ${this.presets.length + 1} · ${layers.length} layers`, layers });
+      this.tab = "views";
+      this.renderPanel();
+    }
+
+    viewState() {
+      return {
+        v: 1, s: this.scale, x: this.cx, y: this.cy,
+        l: Array.from(this.visible), t: this.tracksOn, f: this.fillOn,
+        g: this.gridOn, o: this.opacity,
+      };
+    }
+
+    copyState() {
+      const text = btoa(JSON.stringify(this.viewState()));
+      const done = () => this.toast("View copied — paste it in the Views tab to return here");
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, () => this.toast(text));
+      } else {
+        this.toast(text);
+      }
+      this.lastState = text;
+      return text;
+    }
+
+    applyState(text) {
+      try {
+        const st = JSON.parse(atob(String(text).trim()));
+        if (!st || st.v !== 1) throw new Error("not a view");
+        this.scale = st.s; this.cx = st.x; this.cy = st.y;
+        this.visible = new Set(st.l || []);
+        this.tracksOn = !!st.t; this.fillOn = !!st.f; this.gridOn = !!st.g;
+        if (typeof st.o === "number") this.opacity = st.o;
+        this.solo = null;
+        this.pushHistory();
+        this.renderPanel();
+        this.draw();
+        this.toast("View restored");
+        return true;
+      } catch (e) {
+        this.toast("That does not look like a copied view");
+        return false;
+      }
+    }
+
+    toast(message) {
+      if (this.toastEl) this.toastEl.remove();
+      const el = document.createElement("div");
+      el.className = "gv-toast";
+      el.textContent = message;
+      this.canvas.parentElement.appendChild(el);
+      this.toastEl = el;
+      setTimeout(() => { if (el.parentElement) el.remove(); }, 3200);
+    }
+
     syncPanel() {
+      if (this.tab !== "layers" || !this.rowEls) { this.sync(); return; }
       for (const layer of this.A.layers) {
         const el = this.rowEls[layer.name];
         if (!el) continue;
@@ -457,6 +1250,8 @@
       set(this.btnGrid, this.gridOn);
       set(this.btnLabels, this.labelsOn);
       set(this.btnFill, this.fillOn);
+      set(this.btnTracks, this.tracksOn);
+      set(this.btnCellBoxes, this.cellBoxesOn);
       for (const m in this.modeButtons) set(this.modeButtons[m], this.mode === m);
       if (this.cmpButtons) {
         for (const m in this.cmpButtons) set(this.cmpButtons[m], this.compareMode === m);
@@ -468,30 +1263,167 @@
 
     renderInfo() {
       const parts = [];
+
+      if (this.activeMarker) {
+        const m = this.activeMarker;
+        parts.push(`<div class="gv-isec">Rule ${m.id} — ${m.status}</div>
+          <div class="gv-mtext">${m.rule || ""}</div>
+          <div class="gv-mtext gv-dim">${m.detail || ""}</div>` +
+          (m.layers.length ? `<div class="gv-irow"><span>Layers</span><b>${m.layers.join(", ")}</b></div>` : "") +
+          `<div class="gv-quick" style="padding:6px 0 0">
+             <button class="gv-btn" data-act="waive">${this.waived[m.id] ? "Un-waive" : "Waive"}</button>
+             <button class="gv-btn" data-act="report">Copy report</button>
+           </div>`);
+      }
+
+      if (this.probeA || this.probeB) {
+        const a = this.probeA, b = this.probeB;
+        let verdict;
+        if (a && b) {
+          verdict = a.net === b.net
+            ? `<b style="color:#3fb950">same net (${a.net})</b>`
+            : `<b style="color:#f0883e">different nets (${a.net} and ${b.net})</b>`;
+        } else if (a) {
+          verdict = `net <b>${a.net}</b> — shift-click a second shape to compare`;
+        } else {
+          verdict = "no net at that point";
+        }
+        // Physical connectivity only. Whether two shapes are *meant* to be joined
+        // needs a netlist, and this must not be read as an LVS result.
+        parts.push(`<div class="gv-isec">Net probe</div><div class="gv-mtext">${verdict}</div>
+          <div class="gv-mtext gv-dim">Physical connectivity from the connection stack.
+          Whether they are <i>meant</i> to be joined needs a netlist.</div>`);
+      }
+
+      if (this.netHighlight) {
+        const n = this.netHighlight;
+        parts.push(`<div class="gv-isec">Net ${n.net}</div>
+          <div class="gv-irow"><span>Shapes</span><b>${n.shapeCount}</b></div>
+          <div class="gv-irow"><span>Layers</span><b>${n.layers.length}</b></div>
+          <div class="gv-irow"><span>Area</span><b>${fmtArea(n.area)}</b></div>`);
+      }
+
+      if (this.activeRegion) {
+        const r = this.activeRegion;
+        const names = this.data.names || { a: "A", b: "B" };
+        const [x0, y0, x1, y1] = polyBBox(r.o);
+        parts.push(`<div class="gv-isec">Difference on ${r.layer}</div>
+          <div class="gv-irow"><span>Only in</span><b>${r.side === "a" ? names.a : names.b}</b></div>
+          <div class="gv-irow"><span>Area</span><b>${fmtArea(r.a)}</b></div>
+          <div class="gv-irow"><span>Extent</span><b>${fmtLen(x1 - x0)} × ${fmtLen(y1 - y0)}</b></div>
+          <div class="gv-irow"><span>Origin</span><b>${fmtCoord(x0)}, ${fmtCoord(y0)} nm</b></div>
+          <div class="gv-mtext gv-dim">A geometric difference on one layer. Whether it
+          changes behaviour needs a netlist or a schematic.</div>`);
+      }
+
+      if (this.activePlacement) {
+        const p = this.activePlacement;
+        const box = p.bbox;
+        parts.push(`<div class="gv-isec">Instance ${p.cell}</div>
+          <div class="gv-mtext gv-dim">${p.path || ""}</div>
+          <div class="gv-irow"><span>In</span><b>${p.parent || ""}</b></div>
+          <div class="gv-irow"><span>Level</span><b>${p.depth}</b></div>
+          <div class="gv-irow"><span>Orientation</span><b>${p.orient || "R0"}</b></div>` +
+          (box ? `<div class="gv-irow"><span>Size</span><b>${fmtLen(box[2] - box[0])} × ${fmtLen(box[3] - box[1])}</b></div>
+                  <div class="gv-irow"><span>Origin</span><b>${fmtCoord(box[0])}, ${fmtCoord(box[1])} nm</b></div>` : "") +
+          `<div class="gv-irow"><span>Shapes in cell</span><b>${p.shapes}</b></div>`);
+      } else if (this.activeCell) {
+        const c = this.activeCell;
+        const box = c.bbox;
+        parts.push(`<div class="gv-isec">Cell ${c.name}${c.isTop ? " (top)" : ""}</div>
+          <div class="gv-irow"><span>Shapes</span><b>${c.shapes}</b></div>
+          <div class="gv-irow"><span>Placements inside</span><b>${c.placements}</b></div>
+          <div class="gv-irow"><span>Levels below</span><b>${c.levels}</b></div>` +
+          (box ? `<div class="gv-irow"><span>Bounding box</span><b>${fmtLen(box[2] - box[0])} × ${fmtLen(box[3] - box[1])}</b></div>` : ""));
+      }
+
       if (this.selection) {
         const s = this.selection;
-        parts.push(`<div class="gv-isec"><b>${s.layer}</b> <span class="gv-dim">${s.ld}</span></div>
+        parts.push(`<div class="gv-isec">${s.layer} <span class="gv-dim">${s.ld}</span></div>
           <div class="gv-irow"><span>Size</span><b>${fmtLen(s.shape.w)} × ${fmtLen(s.shape.h)}</b></div>
           <div class="gv-irow"><span>Area</span><b>${fmtArea(s.shape.a)}</b></div>
           <div class="gv-irow"><span>Centre</span><b>${fmtCoord(s.shape.cx)}, ${fmtCoord(s.shape.cy)} nm</b></div>
           <div class="gv-irow"><span>Origin</span><b>${fmtCoord(s.shape.x)}, ${fmtCoord(s.shape.y)} nm</b></div>
           ${s.shape.v ? `<div class="gv-irow"><span>Vertices</span><b>${s.shape.v}</b></div>` : ""}`);
       }
+
       if (this.rulers.length) {
         parts.push('<div class="gv-isec">Measurements</div>');
         this.rulers.forEach((r, i) => {
-          parts.push(`<div class="gv-irow gv-mrow" data-ruler="${i}"><span>${r.kind === "area"
-            ? "Box " + fmtLen(Math.abs(r.x1 - r.x0)) + " × " + fmtLen(Math.abs(r.y1 - r.y0))
-            : fmtLen(Math.hypot(r.x1 - r.x0, r.y1 - r.y0))}</span>` +
-            `<b>${r.kind === "area" ? fmtArea(Math.abs((r.x1 - r.x0) * (r.y1 - r.y0)))
-                                    : "Δ " + fmtLen(r.x1 - r.x0) + ", " + fmtLen(r.y1 - r.y0)}</b></div>`);
+          const text = r.kind === "area"
+            ? `${fmtLen(Math.abs(r.x1 - r.x0))} × ${fmtLen(Math.abs(r.y1 - r.y0))}`
+            : fmtLen(Math.hypot(r.x1 - r.x0, r.y1 - r.y0));
+          const value = r.kind === "area"
+            ? fmtArea(Math.abs((r.x1 - r.x0) * (r.y1 - r.y0)))
+            : `Δ ${fmtLen(r.x1 - r.x0)}, ${fmtLen(r.y1 - r.y0)}`;
+          parts.push(`<div class="gv-irow gv-mrow"><span>${text}</span><b>${value}</b>` +
+                     `<button class="gv-x" data-del="${i}" title="Delete">×</button></div>`);
         });
+        parts.push('<div class="gv-quick" style="padding:6px 0 0">' +
+                   '<button class="gv-btn" data-act="copy-measure">Copy measurements</button></div>');
       }
+
       if (!parts.length) {
         parts.push('<div class="gv-hint">Click a shape for its dimensions. ' +
-                   'Press <kbd>R</kbd> for the ruler, <kbd>F</kbd> to fit, <kbd>?</kbd> for all keys.</div>');
+                   '<kbd>R</kbd> ruler · double-click a shape to measure it · ' +
+                   '<kbd>N</kbd> next rule result · <kbd>T</kbd> routing grid · ' +
+                   '<kbd>?</kbd> all keys.</div>');
       }
       this.info.innerHTML = parts.join("");
+
+      // Delegated, because this markup is rebuilt on every state change.
+      this.info.querySelectorAll("[data-del]").forEach((b) => {
+        b.addEventListener("click", () => {
+          this.rulers.splice(Number(b.dataset.del), 1);
+          this.sync(); this.draw();
+        });
+      });
+      this.info.querySelectorAll("[data-act]").forEach((b) => {
+        b.addEventListener("click", () => {
+          const act = b.dataset.act;
+          if (act === "waive" && this.activeMarker) {
+            const id = this.activeMarker.id;
+            if (this.waived[id]) delete this.waived[id];
+            else this.waived[id] = true;
+            this.renderPanel();
+          } else if (act === "report") {
+            this.copyReport();
+          } else if (act === "copy-measure") {
+            this.copyMeasurements();
+          }
+        });
+      });
+    }
+
+    // A review is only useful if it leaves the tool. KLayout's marker database is a
+    // local file; text on the clipboard goes into a ticket or a message.
+    copyReport() {
+      const lines = ["Rule review — " + (this.A.topCell || this.A.title)];
+      for (const m of this.markers) {
+        if (m.status === "pass") continue;
+        lines.push(`[${m.status}${this.waived[m.id] ? ", waived" : ""}] ${m.id} — ${m.rule}`);
+        if (m.detail) lines.push("    " + m.detail);
+      }
+      this.copyText(lines.join("\n"), `${lines.length - 1} result(s) copied`);
+    }
+
+    copyMeasurements() {
+      const lines = this.rulers.map((r, i) => r.kind === "area"
+        ? `${i + 1}. box ${fmtLen(Math.abs(r.x1 - r.x0))} × ${fmtLen(Math.abs(r.y1 - r.y0))} = ` +
+          fmtArea(Math.abs((r.x1 - r.x0) * (r.y1 - r.y0)))
+        : `${i + 1}. ${fmtLen(Math.hypot(r.x1 - r.x0, r.y1 - r.y0))} ` +
+          `(dx ${fmtLen(r.x1 - r.x0)}, dy ${fmtLen(r.y1 - r.y0)})`);
+      this.copyText(lines.join("\n"), `${lines.length} measurement(s) copied`);
+    }
+
+    copyText(text, message) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => this.toast(message),
+                                                 () => this.toast("Copy blocked by the browser"));
+      } else {
+        this.toast("Copy is not available in this browser");
+      }
+      this.lastCopied = text;
     }
 
     // ---- view transform ----
@@ -670,6 +1602,22 @@
 
       c.addEventListener("contextmenu", (e) => e.preventDefault());
 
+      // Auto-measure. Clicking inside a shape and getting its width and height
+      // without aiming at two edges is the measurement a reviewer makes most often.
+      c.addEventListener("dblclick", (e) => {
+        const r = c.getBoundingClientRect();
+        const wxp = this.wx(e.clientX - r.left), wyp = this.wy(e.clientY - r.top);
+        const hit = this.pick(wxp, wyp);
+        if (!hit) return;
+        e.preventDefault();
+        const s2 = hit.shape;
+        this.rulers.push({ kind: "line", x0: s2.x, y0: wyp, x1: s2.x + s2.w, y1: wyp });
+        this.rulers.push({ kind: "line", x0: wxp, y0: s2.y, x1: wxp, y1: s2.y + s2.h });
+        this.selection = hit;
+        this.sync();
+        this.draw();
+      });
+
       c.addEventListener("wheel", (e) => {
         e.preventDefault();
         const r = c.getBoundingClientRect();
@@ -704,6 +1652,10 @@
         } else if (this.mode === "probe") {
           this.selection = this.pick(this.wx(px), this.wy(py));
           this.sync();
+        } else if (this.mode === "net") {
+          // Shift-click asks the second question: same net as the last one?
+          this.traceAt(this.wx(px), this.wy(py), e.shiftKey);
+          if (!this.traceLock && !e.shiftKey) this.setMode("pan");
         }
         this.draw();
       });
@@ -732,7 +1684,19 @@
         }
 
         this.snapped = this.snap(wxp, wyp);
-        if (this.pending) { this.pending.x1 = this.snapped.x; this.pending.y1 = this.snapped.y; }
+        if (this.pending) {
+          let nx = this.snapped.x, ny = this.snapped.y;
+          if (e.shiftKey) {
+            // Pitch and width measurements are axis-aligned; a free-angle ruler
+            // reads a hypotenuse and looks like a wrong answer.
+            if (Math.abs(nx - this.pending.x0) >= Math.abs(ny - this.pending.y0)) {
+              ny = this.pending.y0;
+            } else {
+              nx = this.pending.x0;
+            }
+          }
+          this.pending.x1 = nx; this.pending.y1 = ny;
+        }
         const hit = this.mode === "ruler" ? null : this.pick(wxp, wyp);
         const changed = (hit && hit.shape) !== (this.hover && this.hover.shape);
         this.hover = hit;
@@ -803,12 +1767,21 @@
           g: () => { this.gridOn = !this.gridOn; this.sync(); this.draw(); },
           l: () => { this.labelsOn = !this.labelsOn; this.sync(); this.draw(); },
           o: () => { this.fillOn = !this.fillOn; this.sync(); this.draw(); },
+          t: () => { this.tracksOn = !this.tracksOn; this.sync(); this.draw(); },
+          h: () => { this.cellBoxesOn = !this.cellBoxesOn; this.renderPanel(); this.draw(); },
           "+": () => this.zoomBy(1.4), "=": () => this.zoomBy(1.4),
           "-": () => this.zoomBy(1 / 1.4), "_": () => this.zoomBy(1 / 1.4),
           escape: () => this.clearAnnotations(),
           backspace: () => this.goHistory(-1),
           "?": () => this.toggleHelp(),
         };
+        if (k === "n") {                       // step the list this view is about
+          e.preventDefault();
+          if (this.compare) this.stepRegion(e.shiftKey ? -1 : 1);
+          else if (this.markers.length) this.stepMarker(e.shiftKey ? -1 : 1);
+          else this.setMode("net");
+          return;
+        }
         if (map[k]) { e.preventDefault(); map[k](); return; }
         const pan = { arrowleft: [-1, 0], arrowright: [1, 0], arrowup: [0, 1], arrowdown: [0, -1] };
         if (pan[k]) {
@@ -851,7 +1824,17 @@
       this.rulers = [];
       this.pending = null;
       this.selection = null;
-      this.sync();
+      // Escape clears everything the user put on the drawing, which includes the
+      // highlights: leaving a marker or an instance outlined after "clear" makes
+      // the key feel broken.
+      this.activeMarker = null;
+      this.activePlacement = null;
+      this.activeCell = null;
+      this.activeRegion = null;
+      this.netHighlight = null;
+      this.probeA = null;
+      this.probeB = null;
+      this.renderPanel();
       this.draw();
     }
 
@@ -866,8 +1849,13 @@
         <div><kbd>A</kbd> area box</div><div><kbd>P</kbd> probe</div>
         <div><kbd>S</kbd> snapping</div><div><kbd>G</kbd> grid</div>
         <div><kbd>L</kbd> labels</div><div><kbd>O</kbd> outline only</div>
+        <div><kbd>T</kbd> routing grid</div><div><kbd>H</kbd> cell boxes</div>
+        <div><kbd>N</kbd> next result</div><div><kbd>Shift+N</kbd> previous</div>
         <div><kbd>Esc</kbd> clear</div>
-        <div class="gv-dim">Shift+drag zooms to a box · right-drag always pans · wheel zooms at the cursor</div>`;
+        <div class="gv-dim">Shift+drag zooms to a box · right-drag always pans · wheel zooms at the cursor</div>
+        <div class="gv-dim">Find box: <b>w&lt;21</b>, <b>h&gt;50</b>, <b>a&lt;300</b> — sizes in nm,
+        Enter steps through the hits</div>
+        <div class="gv-dim">Double-click a shape to measure it · Shift holds a ruler to one axis</div>`;
       el.addEventListener("click", () => this.toggleHelp());
       this.canvas.parentElement.appendChild(el);
       this.helpEl = el;
@@ -937,6 +1925,10 @@
 
       if (this.compare && (cm === "xor" || cm === "overlay")) this.drawRegions(ctx);
 
+      if (this.tracksOn) this.drawTracks(ctx);
+      if (this.netHighlight) this.drawNet(ctx);
+      if (this.cellBoxesOn || this.activePlacement) this.drawCellBoxes(ctx);
+      if (this.findHits.length) this.drawFindHits(ctx);
       this.drawBoundary(ctx);
       if (this.labelsOn) this.drawLabels(ctx);
       this.drawAnnotations(ctx);
@@ -1042,15 +2034,28 @@
     drawRegions(ctx) {
       for (const r of this.data.regions) {
         if (!this.visible.has(r.layer)) continue;
+        const active = this.activeRegion === r;
         ctx.beginPath();
         ctx.moveTo(this.sx(r.o[0][0]), this.sy(r.o[0][1]));
         for (let i = 1; i < r.o.length; i++) ctx.lineTo(this.sx(r.o[i][0]), this.sy(r.o[i][1]));
         ctx.closePath();
         ctx.fillStyle = r.side === "a" ? "rgba(214,39,40,0.55)" : "rgba(44,160,44,0.55)";
         ctx.strokeStyle = r.side === "a" ? "#d62728" : "#2ca02c";
-        ctx.lineWidth = 1.2;
+        ctx.lineWidth = active ? 2.4 : 1.2;
         ctx.fill();
         ctx.stroke();
+        if (active) {
+          // A ring outside the region, so the highlight cannot be mistaken for
+          // extra differing area.
+          const [x0, y0, x1, y1] = polyBBox(r.o);
+          ctx.save();
+          ctx.setLineDash([4, 3]);
+          ctx.strokeStyle = "#f0b429";
+          ctx.lineWidth = 1.6;
+          ctx.strokeRect(this.sx(x0) - 4, this.sy(y1) - 4,
+                         this.sx(x1) - this.sx(x0) + 8, this.sy(y0) - this.sy(y1) + 8);
+          ctx.restore();
+        }
       }
     }
 
@@ -1067,6 +2072,91 @@
         ctx.fillStyle = "#c9d4e0";
         ctx.fillText(text, 30, y);
         y -= 16;
+      }
+      ctx.restore();
+    }
+
+    drawNet(ctx) {
+      const net = this.netHighlight;
+      ctx.save();
+      for (const s of net.shapes) {
+        ctx.beginPath();
+        ctx.moveTo(this.sx(s.o[0][0]), this.sy(s.o[0][1]));
+        for (let i = 1; i < s.o.length; i++) ctx.lineTo(this.sx(s.o[i][0]), this.sy(s.o[i][1]));
+        ctx.closePath();
+        ctx.fillStyle = "rgba(255,214,102,0.30)";
+        ctx.strokeStyle = "#ffd666";
+        ctx.lineWidth = 2;
+        ctx.fill();
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    drawTracks(ctx) {
+      // The routing grid from the track-guide layers. Drawn as centre lines so
+      // "is this wire on grid?" is answered by looking rather than measuring.
+      ctx.save();
+      ctx.setLineDash([3, 3]);
+      ctx.lineWidth = 1;
+      const [bx0, by0, bx1, by1] = this.A.bbox;
+      for (const metal in this.tracks) {
+        if (metal.startsWith("_")) continue;
+        const t = this.tracks[metal];
+        ctx.strokeStyle = "rgba(88,166,255,0.55)";
+        for (const posNm of t.positionsNm || []) {
+          const at = posNm / 1000;
+          ctx.beginPath();
+          if (t.axis === "y") {
+            ctx.moveTo(this.sx(bx0), this.sy(at)); ctx.lineTo(this.sx(bx1), this.sy(at));
+          } else {
+            ctx.moveTo(this.sx(at), this.sy(by0)); ctx.lineTo(this.sx(at), this.sy(by1));
+          }
+          ctx.stroke();
+        }
+      }
+      const cpp = this.tracks._cpp;
+      if (cpp && cpp.columnsNm && cpp.columnsNm.length) {
+        ctx.strokeStyle = "rgba(255,122,198,0.6)";
+        for (const posNm of cpp.columnsNm) {
+          const at = posNm / 1000;
+          ctx.beginPath();
+          ctx.moveTo(this.sx(at), this.sy(by0));
+          ctx.lineTo(this.sx(at), this.sy(by1));
+          ctx.stroke();
+        }
+      }
+      ctx.restore();
+    }
+
+    drawCellBoxes(ctx) {
+      // Instance boundaries, to the depth the slider allows. Names are only drawn
+      // when the box is big enough on screen to hold one, which is what keeps a
+      // dense array from turning into a block of overlapping text.
+      const placements = (this.tree && this.tree.placements) || [];
+      const limit = this.depthLimit || (this.tree && this.tree.maxDepth) || 0;
+      ctx.save();
+      ctx.font = "10px ui-monospace, monospace";
+      ctx.textBaseline = "top";
+      for (const p of placements) {
+        if (!p.bbox) continue;
+        const active = this.activePlacement && this.activePlacement.id === p.id;
+        if (!active && (!this.cellBoxesOn || p.depth > limit)) continue;
+        const [x0, y0, x1, y1] = p.bbox;
+        const px = this.sx(x0), py = this.sy(y1);
+        const w = this.sx(x1) - px, h = this.sy(y0) - py;
+        ctx.setLineDash(active ? [] : [4, 3]);
+        ctx.lineWidth = active ? 2 : 1;
+        ctx.strokeStyle = active ? "#f0b429" : "rgba(240,180,41,0.42)";
+        ctx.strokeRect(px + 0.5, py + 0.5, w, h);
+        if (active) {
+          ctx.fillStyle = "rgba(240,180,41,0.10)";
+          ctx.fillRect(px + 0.5, py + 0.5, w, h);
+        }
+        if (w > 34 && h > 13) {
+          ctx.fillStyle = active ? "#ffd77a" : "rgba(240,180,41,0.72)";
+          ctx.fillText(p.cell, px + 3, py + 2);
+        }
       }
       ctx.restore();
     }

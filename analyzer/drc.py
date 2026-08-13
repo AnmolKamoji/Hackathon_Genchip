@@ -143,9 +143,18 @@ def detect_technology(outlines: dict[str, Any]) -> dict[str, Any]:
 
 
 def _result(rule: dict[str, Any], status: str, detail: str,
-            observed: dict[str, Any] | None = None) -> dict[str, Any]:
+            observed: dict[str, Any] | None = None,
+            layers: list[str] | None = None) -> dict[str, Any]:
+    """One rule result.
+
+    `layers` names the layers the check actually read. It is what lets a viewer
+    cross-probe a violation back to the geometry - the equivalent of clicking a
+    marker in KLayout's marker browser - instead of leaving the reader with a
+    sentence and no way to find what it is about.
+    """
     return {"id": rule["id"], "section": rule["section"], "rule": rule["rule"],
-            "status": status, "detail": detail, "observed": observed or {}}
+            "status": status, "detail": detail, "observed": observed or {},
+            "layers": [l for l in (layers or []) if l]}
 
 
 def check_layout(outlines: dict[str, Any], rules: dict[str, Any] | None = None,
@@ -176,12 +185,16 @@ def check_layout(outlines: dict[str, Any], rules: dict[str, Any] | None = None,
 
     results: list[dict[str, Any]] = []
     implemented: set[str] = set()
+    # The layers the check about to run will read, consumed by the next add().
+    pending_layers: list[str] = []
 
     def applies(rule_id: str) -> bool:
         techs = by_id[rule_id]["technologies"]
         return techs == ["all"] or tech is None or tech in techs
 
-    def add(rule_id: str, status: str, detail: str, observed=None):
+    def add(rule_id: str, status: str, detail: str, observed=None, layers=None):
+        use = list(layers) if layers is not None else list(pending_layers)
+        pending_layers.clear()
         implemented.add(rule_id)
         rule = by_id.get(rule_id)
         if not rule:
@@ -190,9 +203,10 @@ def check_layout(outlines: dict[str, Any], rules: dict[str, Any] | None = None,
             status, detail = "not applicable", (
                 f"this rule applies to {', '.join(rule['technologies'])}; the layout was "
                 f"identified as {tech}")
-        results.append(_result(rule, status, detail, observed))
+        results.append(_result(rule, status, detail, observed, use))
 
     def equal_widths(rule_id: str, name_a: str, name_b: str, axis: str, what: str):
+        pending_layers[:] = [name_a, name_b]
         a, b = _widths(_layer(outlines, name_a), axis), _widths(_layer(outlines, name_b), axis)
         if not a or not b:
             add(rule_id, "not checked",
@@ -210,6 +224,7 @@ def check_layout(outlines: dict[str, Any], rules: dict[str, Any] | None = None,
                 observed)
 
     def uniform_width(rule_id: str, name: str, axis: str, what: str):
+        pending_layers[:] = [name]
         row = _layer(outlines, name)
         values = _widths(row, axis)
         if not values:
@@ -225,6 +240,7 @@ def check_layout(outlines: dict[str, Any], rules: dict[str, Any] | None = None,
                 {f"{name}_{what}_um": values})
 
     def fixed_pitch(rule_id: str, name: str, axis: str):
+        pending_layers[:] = [name]
         row = _layer(outlines, name)
         info = _pitch(row, axis)
         if not info["pitches"]:
@@ -240,6 +256,7 @@ def check_layout(outlines: dict[str, Any], rules: dict[str, Any] | None = None,
                 {f"{name}_pitch_um": info["pitches"]})
 
     def on_track_guide(rule_id: str, name: str, guide: str, axis: str):
+        pending_layers[:] = [name, guide]
         """Do the wires sit on their declared routing tracks?
 
         This replaces a naive "is the pitch uniform?" test, which produced a false
@@ -282,6 +299,7 @@ def check_layout(outlines: dict[str, Any], rules: dict[str, Any] | None = None,
                 + note, observed)
 
     def spacing_matches_pitch(rule_id: str, name: str, axis: str):
+        pending_layers[:] = [name]
         """Rules 3.8.5 / 3.10.5: spacing == pitch - width.
 
         Width is measured along the *same* axis as the pitch: for a vertical M1 wire
@@ -320,6 +338,7 @@ def check_layout(outlines: dict[str, Any], rules: dict[str, Any] | None = None,
                 f"{expected * 1000:.0f} nm", observed)
 
     def via_lands_on(rule_id: str, via: str, targets: list[str]):
+        pending_layers[:] = [via, *targets]
         """Rules 3.7.5-3.7.9 / 3.9.4: a via must sit on the layers it connects."""
         row = _layer(outlines, via)
         if not row:
@@ -352,6 +371,7 @@ def check_layout(outlines: dict[str, Any], rules: dict[str, Any] | None = None,
                 {"checked_against": present, "shapes": row["shape_count"]})
 
     def within_cell(rule_id: str, name: str):
+        pending_layers[:] = [name, "CELL-BOUNDARY"]
         """Rule 3.11.3: the shape must not extend beyond the cell boundary.
 
         The boundary is the CELL-BOUNDARY layer (1/0 in the manual's layer map), not
@@ -386,6 +406,7 @@ def check_layout(outlines: dict[str, Any], rules: dict[str, Any] | None = None,
             add(rule_id, "pass", f"all {row['shape_count']} {name} shapes are inside the boundary")
 
     def pin_overlaps(rule_id: str, pin: str, drawing: str):
+        pending_layers[:] = [pin, drawing]
         prow, drow = _layer(outlines, pin), _layer(outlines, drawing)
         if not prow or not drow:
             add(rule_id, "not checked", f"{pin} or {drawing} is not present in this layout")

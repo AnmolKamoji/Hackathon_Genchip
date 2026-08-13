@@ -18,9 +18,9 @@ from analyzer.plots import (change_hotspot, density_profile, difference_grid,
                             difference_map, layout_view, similarity_matrix)
 from analyzer.present import findings, headline, nm, pct_of, split_primary, um2
 from analyzer.xor_diff import compare_many
-from analyzer.connectivity import (analyze_connectivity, default_stack, load_stack,
-                                   stack_from_sidecar)
-from analyzer.hierarchy import analyze_hierarchy
+from analyzer.connectivity import (analyze_connectivity, default_stack, extract_nets,
+                                   load_stack, stack_from_sidecar)
+from analyzer.hierarchy import analyze_hierarchy, instance_tree
 from analyzer.measurements import measure_layers, measure_vias, shape_outlines
 from analyzer.pitch import analyze_pitch
 from analyzer.fused import analyze_pair
@@ -134,31 +134,60 @@ def load_connection_stack(stack_bytes: bytes | None, stack_name: str | None, lay
             return None, str(exc)
 
 
-@st.cache_data(show_spinner=False)
-def process_connectivity(gds_bytes: bytes, filename: str, layermap: dict | None,
-                         stack: dict | None, sidecar_metadata: dict | None = None):
-    """Physical connectivity. Tiers 1-2 always; the net graph only with a stack.
+def _pick_stack(layermap: dict | None, stack: dict | None,
+                sidecar_metadata: dict | None = None):
+    """Which connection stack to use, in precedence order.
 
     An uploaded stack wins. Failing that, a semantic sidecar can supply one: its
     via layers are named after their endpoints (`VIA_M0_M1`), which states the
-    stack instead of leaving it to be guessed from geometry.
+    stack instead of leaving it to be guessed from geometry. Last comes the bundled
+    technology stack. Shared so the net graph the page reports and the net shapes
+    the viewer traces can never come from two different stacks.
+    """
+    if stack is not None:
+        return stack
+    if sidecar_metadata:
+        derived = stack_from_sidecar(sidecar_metadata, layermap)
+        if derived["usable_count"]:
+            return derived
+    return default_stack(layermap)
+
+
+@st.cache_data(show_spinner=False)
+def process_connectivity(gds_bytes: bytes, filename: str, layermap: dict | None,
+                         stack: dict | None, sidecar_metadata: dict | None = None):
+    """Physical connectivity. Tiers 1-2 always; the net graph only with a stack."""
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / filename
+        path.write_bytes(gds_bytes)
+        try:
+            # Each result is labelled with where its stack came from, so a net count
+            # always says what it rests on.
+            return analyze_connectivity(
+                path, layermap,
+                stack=_pick_stack(layermap, stack, sidecar_metadata))
+        except Exception as exc:                     # never let this break the page
+            return {"error": str(exc)}
+
+
+@st.cache_data(show_spinner=False)
+def process_net_shapes(gds_bytes: bytes, filename: str, layermap: dict | None,
+                       stack: dict | None, sidecar_metadata: dict | None = None):
+    """The same nets, carrying their polygons, for click-to-trace in the viewer.
+
+    Kept separate from `process_connectivity` on purpose: those polygons are what
+    the viewer highlights, and they have no business in the metadata the model is
+    given - a digest with every polygon in it is a digest that gets truncated.
     """
     with tempfile.TemporaryDirectory() as td:
         path = Path(td) / filename
         path.write_bytes(gds_bytes)
         try:
-            # Precedence: an uploaded stack, then one read off the sidecar's via
-            # names, then the bundled technology stack. Each is labelled in the
-            # result, so a net count always says where its stack came from.
-            use = stack
-            if use is None and sidecar_metadata:
-                derived = stack_from_sidecar(sidecar_metadata, layermap)
-                use = derived if derived["usable_count"] else None
-            if use is None:
-                use = default_stack(layermap)
-            return analyze_connectivity(path, layermap, stack=use)
-        except Exception as exc:                     # never let this break the page
-            return {"error": str(exc)}
+            return {"nets": extract_nets(
+                path, layermap, _pick_stack(layermap, stack, sidecar_metadata),
+                collect_shapes=True)}
+        except Exception:
+            return None
 
 
 @st.cache_data(show_spinner=False)
@@ -238,6 +267,22 @@ def process_extras(gds_bytes: bytes, filename: str, layermap: dict | None, stack
         except Exception as exc:
             out["measurements"] = {"error": str(exc)}
         return out
+
+
+@st.cache_data(show_spinner=False)
+def process_tree(gds_bytes: bytes, filename: str):
+    """Cell placements with their boxes, for the viewer's cell tree.
+
+    Separate from process_extras because it is only needed by the viewer and reads
+    no layer map - the cell structure is in the GDSII file regardless of any .lyp.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / filename
+        path.write_bytes(gds_bytes)
+        try:
+            return instance_tree(path)
+        except Exception:
+            return None
 
 
 @st.cache_data(show_spinner=False)
@@ -339,7 +384,8 @@ if len(metadata_list) == 2 and len(sources) > 1:
     )
 
 
-def render_layout_view(outlines: dict, key: str, colours: dict, title: str = "") -> None:
+def render_layout_view(outlines: dict, key: str, colours: dict, title: str = "",
+                       **analysis) -> None:
     """One layout in the interactive viewer.
 
     Replaces the Plotly figure with a canvas component. The change that matters is
@@ -349,7 +395,7 @@ def render_layout_view(outlines: dict, key: str, colours: dict, title: str = "")
     hover-revealed Plotly modebar sitting outside the plot's own hover region -
     disappeared as soon as the pointer moved toward it.
     """
-    layout_panel(outlines, key=key, colours=colours, title=title)
+    layout_panel(outlines, key=key, colours=colours, title=title, **analysis)
 
 def render_connectivity(conn: dict | None, idx: int) -> None:
     """The connectivity tab. Extracted so the per-layout panel stays readable."""
@@ -555,17 +601,50 @@ if _focus:
                           key="ws_cmp", height=760, expandable=False)
         else:
             name = _focus.get("title") or uploads[0].name
+            idx = _idx_of.get(name, 0)
             outlines, error = process_outlines(
-                uploads[_idx_of.get(name, 0)].getvalue(), name, layermap, conn_stack)
+                uploads[idx].getvalue(), name, layermap, conn_stack)
             if error or not outlines:
                 st.error(f"Could not read the geometry: {error}")
                 return
+            # The expanded view gets exactly what the inline one gets. Dropping the
+            # analysis here would leave the big view with empty Rules, Nets and
+            # Cells tabs - the one place a reviewer is most likely to look for them.
+            drc, _ = process_drc(uploads[idx].getvalue(), name, layermap, conn_stack)
+            cls, _ = process_classification(uploads[idx].getvalue(), name, layermap,
+                                            conn_stack, tuple(u.name for u in uploads))
             layout_panel(outlines, key="ws_lv", colours=_layer_colours, title=name,
-                         height=760, expandable=False)
+                         height=760, expandable=False,
+                         drc=drc,
+                         connectivity=process_net_shapes(
+                             uploads[idx].getvalue(), name, layermap, conn_stack,
+                             metadata_list[idx] if metadata_list[idx].get("metadata_source")
+                             in ("fused", "sidecar") else None),
+                         pitch=(cls or {}).get("pitch"),
+                         hierarchy=metadata_list[idx].get("hierarchy"),
+                         tree=process_tree(uploads[idx].getvalue(), name))
 
+    _focus_name = _focus.get("title") or _focus.get("a")
     _focus_meta = next((m for m in metadata_list
-                        if m["source"]["file"] == (_focus.get("title") or _focus.get("a"))),
+                        if m["source"]["file"] == _focus_name),
                        metadata_list[0])
+    # The per-layout section attaches these as it renders, and it has not run: the
+    # workspace stops the script before it. Without them the expanded chat answers
+    # "no pitch metrics are available" for a file the page below reports a pitch
+    # for, which reads as the two views disagreeing.
+    _focus_cls, _ = process_classification(
+        uploads[_idx_of.get(_focus_name, 0)].getvalue(),
+        _focus_meta["source"]["file"], layermap, conn_stack,
+        tuple(u.name for u in uploads))
+    if _focus_cls:
+        _focus_meta["classification"] = _focus_cls
+        _focus_meta["pitch"] = _focus_cls.get("pitch")
+        if _focus_cls.get("tech_parameters"):
+            _focus_meta["tech_parameters"] = _focus_cls["tech_parameters"]
+    _focus_drc, _ = process_drc(uploads[_idx_of.get(_focus_name, 0)].getvalue(),
+                                _focus_meta["source"]["file"], layermap, conn_stack)
+    if _focus_drc:
+        _focus_meta["drc"] = _focus_drc
     workspace(_focus, _render_focus,
               lambda q: answer_for(q, _focus_meta,
                                    history=st.session_state.get("ws_chat", [])[-6:]))
@@ -767,13 +846,31 @@ for idx, metadata in enumerate(metadata_list):
         tabs = st.tabs(["Layout", "Design rules", "Layers", "Connectivity", "Cells",
                         "AI review"])
 
+        # Fetched before the tabs because the viewer in the Layout tab turns rule
+        # results into clickable markers and the cell tree into a navigator. All
+        # cached calls.
+        drc_for_view, _ = process_drc(uploads[idx].getvalue(), uploads[idx].name,
+                                      layermap, conn_stack)
+        hierarchy_for_view = metadata.get("hierarchy")
+        tree_for_view = process_tree(uploads[idx].getvalue(), uploads[idx].name)
+        # Net polygons, so a click in the viewer can highlight a whole net. The
+        # page's own connectivity block deliberately carries no polygons.
+        nets_for_view = process_net_shapes(
+            uploads[idx].getvalue(), uploads[idx].name, layermap, conn_stack,
+            metadata if metadata.get("metadata_source") in ("fused", "sidecar") else None)
+
         with tabs[0]:
             outlines, outline_error = process_outlines(
                 uploads[idx].getvalue(), uploads[idx].name, layermap, conn_stack)
             if outline_error:
                 st.error(f"Could not read the geometry for drawing: {outline_error}")
             elif outlines:
-                render_layout_view(outlines, f"lv{idx}", _layer_colours, title=uploads[idx].name)
+                render_layout_view(outlines, f"lv{idx}", _layer_colours,
+                                   title=uploads[idx].name,
+                                   drc=drc_for_view, connectivity=nets_for_view,
+                                   pitch=(cls or {}).get("pitch"),
+                                   hierarchy=hierarchy_for_view,
+                                   tree=tree_for_view)
 
         with tabs[1]:
             drc, drc_error = process_drc(uploads[idx].getvalue(), uploads[idx].name,

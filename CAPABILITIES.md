@@ -305,6 +305,43 @@ levels. A test asserts that no module in `analyzer/` reads one.
 
 ---
 
+## 26. The layout viewer
+
+A canvas viewer (`ui/viewer.js`, `ui/viewer.css`, mounted by `ui/viewer.py`) replaces
+the Plotly figures. It runs inside an iframe with the whole geometry payload, so a
+layer toggle, a zoom or a ruler never re-runs the Python script — which is what made
+the old view jump back and its hover-revealed toolbar vanish on the way to it.
+
+**What it does that KLayout does.** Pan, wheel-zoom at the cursor, box zoom, fit,
+view history; a layer list with per-layer visibility, solo, colour swatch,
+layer/datatype, shape counts and a filter; dither patterns, fill/outline, opacity,
+labels, grid, scale bar and a live coordinate readout; rulers with vertex and edge
+snapping; an area box; a shape probe reporting the measured size, area, centre,
+origin and vertex count; a cell tree with placements, instance boundaries and a
+hierarchy-depth control; saved views; PNG export; keyboard shortcuts with a help
+overlay.
+
+**What it does that KLayout does not.**
+
+| Tool | What it answers |
+|---|---|
+| Rule marker browser | Every DRM result is a row; clicking one isolates the layers *that check read* and zooms to them. Visited state, waive, failures-only, `N`/`Shift+N` to step. |
+| Net tracing | Click a shape to highlight the whole physical net; shift-click a second for a same-net / different-net verdict. Says "physical, not intent" on every answer. |
+| Routing-grid overlay | Draws the track centres from the track-guide layers, so "is this wire on grid?" is answered by looking (`T`). |
+| Find by measured size | `w<21`, `h>50`, `a<300` over the analyzer's own numbers — the question KLayout needs a DRC script for. Enter steps through the hits. |
+| Difference browser | In a comparison, every XOR region is a row, largest first, with its area and extent; stepping through them is `N`. Picking one forces a compare mode that can show it. |
+| Auto-measure | Double-clicking a shape drops two rulers matching its measured width and height. |
+| Share a view | Copies zoom, centre, layer set and overlays as a string that restores exactly that view. |
+| Chatbot beside the drawing | The expanded workspace puts the same Q&A path next to the layout, with the same enriched metadata the page uses. |
+
+Every figure the viewer shows was measured in Python and shipped with the geometry;
+nothing is re-derived from screen pixels. 71 browser tests drive the real document in
+headless Chromium — picking, zoom anchoring, layer toggles, snapping, marker
+cross-probe, net probe, the finder, the cell tree and the difference browser — and any
+JavaScript error or `console.error` fails the test that provoked it.
+
+---
+
 ## Verification standard used
 
 Every numeric claim in this document was checked against a **separately written**

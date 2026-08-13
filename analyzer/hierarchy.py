@@ -95,6 +95,96 @@ def analyze_hierarchy(gds_path: str | Path) -> dict[str, Any]:
     }
 
 
+def instance_tree(gds_path: str | Path, max_placements: int = 3000) -> dict[str, Any]:
+    """Every cell placement, with the box it occupies in top-cell coordinates.
+
+    This is what a cell-tree navigator needs and `analyze_hierarchy` does not give:
+    the counts there describe the *structure*, but a reviewer clicking a cell name
+    wants to be taken to where that copy sits on the screen. Transforms are
+    accumulated down the tree, so a box is where the instance really lands - not
+    where its cell was defined.
+
+    The geometry itself is not repeated per cell: the viewer draws a flattened
+    layout, so an instance contributes a boundary and a name, not another copy of
+    its polygons. `max_placements` caps the walk because an array-heavy block can
+    hold millions of placements and none of them would be legible.
+    """
+    import klayout.db as db
+
+    layout = db.Layout()
+    layout.read(str(gds_path))
+    tops = rank_top_cells(layout)
+    if not tops:
+        raise ValueError("GDS contains no top-level cell.")
+    primary = tops[0]
+    dbu = layout.dbu
+
+    def box_um(box) -> list[float] | None:
+        if box.empty():
+            return None
+        return [round(box.left * dbu, 6), round(box.bottom * dbu, 6),
+                round(box.right * dbu, 6), round(box.top * dbu, 6)]
+
+    cells = []
+    for cell in layout.each_cell():
+        cells.append({
+            "name": cell.name,
+            "shapes": sum(cell.shapes(li).size() for li in layout.layer_indexes()),
+            "bbox": box_um(cell.bbox()),
+            "levels": cell.hierarchy_levels(),
+            "placements": sum(inst.size() for inst in cell.each_inst()),
+            "isTop": cell.cell_index() == primary.cell_index(),
+        })
+    cells.sort(key=lambda c: (not c["isTop"], c["name"]))
+
+    placements: list[dict[str, Any]] = []
+    truncated = False
+
+    def walk(cell, trans, depth: int, path: str) -> None:
+        nonlocal truncated
+        for inst in cell.each_inst():
+            child = layout.cell(inst.cell_index)
+            for local in inst.cell_inst.each_cplx_trans():
+                if len(placements) >= max_placements:
+                    truncated = True
+                    return
+                world = trans * local
+                here = f"{path}/{child.name}"
+                placements.append({
+                    "id": len(placements),
+                    "cell": child.name,
+                    "parent": cell.name,
+                    "path": here,
+                    "depth": depth,
+                    "bbox": box_um(child.bbox().transformed(world)),
+                    # Orientation of this copy, not its position: the box already
+                    # says where it is, and "R90 mirrored" is what a reviewer reads
+                    # off a placement. Magnification is only mentioned when it is
+                    # not 1, because a magnified instance is unusual enough to notice.
+                    "orient": (f"R{local.angle:g}"
+                               + (" mirrored" if local.is_mirror() else "")
+                               + (f" ×{local.mag:g}" if local.mag != 1 else "")),
+                    "shapes": sum(child.shapes(li).size() for li in layout.layer_indexes()),
+                })
+                walk(child, world, depth + 1, here)
+
+    walk(primary, db.ICplxTrans(), 1, primary.name)
+
+    depth = primary.hierarchy_levels()
+    return {
+        "top": primary.name,
+        "topBbox": box_um(primary.bbox()),
+        "maxDepth": depth,
+        "flat": depth == 0,
+        "cells": cells,
+        "placements": placements,
+        "truncated": truncated,
+        "note": ("flat - the top cell contains no instances" if depth == 0 else
+                 f"{len(placements)} placement(s) across {depth} level(s)"
+                 + (" (list truncated)" if truncated else "")),
+    }
+
+
 def _warnings(tops, empty, orphans, cycles, unresolved) -> list[str]:
     out = []
     if len(tops) > 1:

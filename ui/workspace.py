@@ -17,7 +17,7 @@ from typing import Any, Callable
 import streamlit as st
 
 from ui.viewer import render as render_viewer
-from ui.viewer_data import build, build_comparison
+from ui.viewer_data import build, build_comparison, with_analysis
 
 FOCUS_KEY = "gv_focus"
 
@@ -35,9 +35,22 @@ def focus_request() -> dict[str, Any] | None:
 
 
 def layout_panel(outlines: dict[str, Any], key: str, colours: dict[str, str],
-                 title: str = "", height: int = 640, expandable: bool = True) -> None:
-    """One layout in the interactive viewer."""
-    payload = build(outlines, fallback_colours=colours, title=title)
+                 title: str = "", height: int = 640, expandable: bool = True,
+                 drc: dict[str, Any] | None = None,
+                 connectivity: dict[str, Any] | None = None,
+                 pitch: dict[str, Any] | None = None,
+                 hierarchy: dict[str, Any] | None = None,
+                 tree: dict[str, Any] | None = None) -> None:
+    """One layout in the interactive viewer.
+
+    The analysis blocks are optional but change what the viewer is: with them, rule
+    results become clickable markers, nets become traceable, cells become navigable
+    and the routing grid can be drawn. Without them it is still a viewer, just not a
+    review surface.
+    """
+    payload = with_analysis(build(outlines, fallback_colours=colours, title=title),
+                            drc=drc, connectivity=connectivity, pitch=pitch,
+                            hierarchy=hierarchy, tree=tree)
     if not payload["layers"]:
         st.info("This layout contains no drawable geometry.")
         return

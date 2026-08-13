@@ -140,3 +140,144 @@ def to_json(payload: dict[str, Any]) -> str:
     """Compact JSON for embedding. Separators matter: the default ones add a space
     per field, which on a few thousand vertices is a measurable slice of the page."""
     return json.dumps(payload, separators=(",", ":"), allow_nan=False)
+
+def markers_payload(drc: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Rule results as reviewable markers.
+
+    This is the marker browser KLayout calls RVE: a result that cannot be clicked
+    back to the geometry is a sentence with nowhere to go, and the reviewer ends up
+    typing coordinates by hand. `layers` comes from the check itself - the layers it
+    actually read - so the link is recorded rather than guessed from the wording.
+    """
+    if not drc or drc.get("available") is False:
+        return []
+    order = {"violation": 0, "not checked": 1, "not applicable": 2, "pass": 3}
+    markers = []
+    for row in drc.get("results") or []:
+        markers.append({
+            "id": row["id"],
+            "section": row.get("section"),
+            "rule": row.get("rule"),
+            "status": row.get("status"),
+            "detail": row.get("detail"),
+            "layers": row.get("layers") or [],
+            "observed": row.get("observed") or {},
+        })
+    markers.sort(key=lambda m: (order.get(m["status"], 9), m["id"]))
+    return markers
+
+
+def nets_payload(connectivity: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Physical nets with their polygons, for click-to-trace highlighting.
+
+    Only present when a connection stack was available - without one there is no
+    net graph, and the viewer says so rather than showing an empty list as though
+    the layout had no nets.
+    """
+    if not connectivity:
+        return []
+    block = (connectivity.get("nets") or {})
+    out = []
+    for net in block.get("nets") or []:
+        shapes = [{"layer": s["layer"], "o": _outline(s["outline_um"])}
+                  for s in net.get("shapes") or []]
+        if not shapes:
+            continue
+        out.append({
+            "net": net.get("net"),
+            "layers": net.get("layers") or [],
+            "shapeCount": net.get("shape_count"),
+            "area": float(f"{net.get('area_um2', 0):.9g}"),
+            "spans": bool(net.get("spans_multiple_layers")),
+            "provisional": bool(block.get("provisional")),
+            "shapes": shapes,
+        })
+    return out
+
+
+def tracks_payload(pitch: dict[str, Any] | None) -> dict[str, Any]:
+    """The routing grid, so it can be drawn over the layout.
+
+    A track overlay answers "is this wire on grid?" by looking, which is otherwise
+    a ruler measurement repeated once per wire.
+    """
+    if not pitch:
+        return {}
+    out = {}
+    for metal, entry in (pitch.get("metal_pitches") or {}).items():
+        if not entry or not entry.get("positions_nm"):
+            continue
+        out[metal] = {
+            "axis": entry.get("pitch_axis") or ("y" if entry.get("routing_direction") == "horizontal" else "x"),
+            "pitchNm": entry.get("pitch_nm"),
+            "positionsNm": entry.get("positions_nm"),
+            "widthNm": entry.get("width_nm"),
+            "uniform": bool(entry.get("uniform")),
+            "note": entry.get("note"),
+        }
+    gate = pitch.get("gate_pitch") or {}
+    if gate.get("cpp_nm"):
+        out["_cpp"] = {"cppNm": gate["cpp_nm"],
+                       "columnsNm": (gate.get("detail") or {}).get("centres_nm")
+                       or gate.get("centres_nm") or []}
+    return out
+
+
+def cells_payload(hierarchy: dict[str, Any] | None,
+                  tree: dict[str, Any] | None) -> dict[str, Any]:
+    """The cell tree, for navigation and instance boundaries.
+
+    `tree` carries the placements with their transformed boxes; `hierarchy` carries
+    the structural counts already reported on the Hierarchy tab. Both are passed so
+    the panel can be built from one payload, and either may be missing - a viewer
+    handed only geometry still has to open.
+    """
+    out: dict[str, Any] = {}
+    if tree:
+        out = {
+            "top": tree.get("top"),
+            "topBbox": tree.get("topBbox"),
+            "maxDepth": tree.get("maxDepth") or 0,
+            "flat": bool(tree.get("flat")),
+            "note": tree.get("note"),
+            "truncated": bool(tree.get("truncated")),
+            "cells": [{"name": c["name"], "shapes": c.get("shapes"),
+                       "bbox": c.get("bbox"), "levels": c.get("levels"),
+                       "placements": c.get("placements"), "isTop": bool(c.get("isTop"))}
+                      for c in tree.get("cells") or []],
+            "placements": [{"id": p["id"], "cell": p["cell"], "parent": p.get("parent"),
+                            "path": p.get("path"), "depth": p.get("depth"),
+                            "bbox": p.get("bbox"), "orient": p.get("orient"),
+                            "shapes": p.get("shapes")}
+                           for p in tree.get("placements") or []],
+        }
+    if hierarchy:
+        out.setdefault("top", hierarchy.get("top_cell"))
+        out["structure"] = {
+            "cellCount": hierarchy.get("cell_count_total"),
+            "topCells": hierarchy.get("top_cells") or [],
+            "depth": hierarchy.get("max_depth_below_top"),
+            "description": hierarchy.get("depth_description"),
+            "emptyCells": hierarchy.get("empty_cells") or [],
+            "orphanCells": hierarchy.get("orphan_cells") or [],
+        }
+    return out
+
+
+def with_analysis(payload: dict[str, Any], drc: dict[str, Any] | None = None,
+                  connectivity: dict[str, Any] | None = None,
+                  pitch: dict[str, Any] | None = None,
+                  hierarchy: dict[str, Any] | None = None,
+                  tree: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Attach the analysis the viewer can act on.
+
+    Everything here was already computed for the report. Sending it to the viewer
+    is what turns a picture into a review surface: rule results become clickable
+    markers, nets become traceable, and the routing grid becomes visible.
+    """
+    payload["markers"] = markers_payload(drc)
+    payload["nets"] = nets_payload(connectivity)
+    payload["tracks"] = tracks_payload(pitch)
+    payload["tree"] = cells_payload(hierarchy, tree)
+    payload["netsAvailable"] = bool(payload["nets"])
+    return payload
