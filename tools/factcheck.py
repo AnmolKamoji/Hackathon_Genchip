@@ -83,9 +83,16 @@ def values_in(obj, out: set[str] | None = None) -> set[str]:
     return out
 
 
-def audit(label: str, prose: str, metadata: dict) -> tuple[int, list[str]]:
-    """Return (numbers_checked, unsupported_numbers)."""
-    allowed = values_in(metadata)
+def audit(label: str, prose: str, metadata: dict,
+          allowed: set[str] | list[str] | None = None) -> tuple[int, list[str]]:
+    """Return (numbers_checked, unsupported_numbers).
+
+    `allowed` lets a caller supply the value set directly instead of deriving it
+    from `metadata`. That is what makes a saved answer re-checkable later: storing
+    the value set alongside the answer is smaller than storing the metadata and,
+    more importantly, cannot omit a block by accident.
+    """
+    allowed = set(allowed) if allowed is not None else values_in(metadata)
     # Derived figures the model is allowed to state because they are printed in
     # the prose of the metadata itself (percentages already rounded, etc.).
     stated = numbers_in(prose)

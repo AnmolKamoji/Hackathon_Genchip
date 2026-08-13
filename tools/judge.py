@@ -194,7 +194,8 @@ def regrade(path: Path) -> int:
             continue
         grader, axis = graders[key]
         fresh = grade_one(record["question"], record.get("reply"), grader, axis,
-                          record.get("metadata_digest") or {})
+                          record.get("metadata_digest") or {},
+                          record.get("grounding_values"))
         slot = by_model.setdefault(record.get("model", "?"), [0, 0])
         slot[0] += 1
         if fresh["verdict"] == "FAIL":
@@ -404,7 +405,8 @@ def build_metadata(gds: Path, layermap) -> dict[str, Any]:
 
 
 def grade_one(question: str, reply: str | None, grader, axis: str,
-              metadata: dict[str, Any]) -> dict[str, Any]:
+              metadata: dict[str, Any],
+              allowed: list[str] | None = None) -> dict[str, Any]:
     """Grade a single answer on all three axes."""
     if not reply:
         # On the deterministic path, None is the design: no local branch claims the
@@ -422,7 +424,7 @@ def grade_one(question: str, reply: str | None, grader, axis: str,
 
     # Grounding: every number must be in the metadata.
     from tools.factcheck import audit
-    _, ungrounded = audit(question, reply, metadata)
+    _, ungrounded = audit(question, reply, metadata, allowed)
     if ungrounded:
         reasons.append(f"grounding: numbers not in the metadata: {ungrounded}")
 
@@ -503,20 +505,24 @@ def judge(gds: Path, use_model: bool, limit: int | None = None,
                 **result, "file": gds.name, "model": model_name,
                 "usage": {k: sum(u.get(k, 0) for u in usage)
                           for k in ("input", "output", "cache_write", "cache_read")},
-                "metadata_digest": _grounding_digest(metadata),
+                "grounding_values": _grounding_values(metadata),
             })
     return results
 
 
-def _grounding_digest(metadata: dict[str, Any]) -> dict[str, Any]:
-    """The parts of the metadata the grounding check reads.
+def _grounding_values(metadata: dict[str, Any]) -> list[str]:
+    """Every value the grounding check would accept, frozen at record time.
 
-    Storing the whole metadata would make every transcript line enormous; storing
-    none of it would make a re-grade unable to check grounding at all.
+    The first version of this kept a hand-picked list of metadata blocks, and left
+    `connectivity` out. A re-grade then failed a Haiku answer that had correctly
+    cited `connectivity.intra_layer.total_components` - the number was real, the
+    stored copy just didn't have it. Any hand-picked subset has that bug waiting in
+    it, so this stores the derived value set instead: it cannot omit a block,
+    and it is about seven times smaller than the metadata it came from.
     """
-    return {key: metadata.get(key) for key in
-            ("design", "layout", "layers", "classification", "pitch", "measurements")
-            if metadata.get(key) is not None}
+    from tools.factcheck import values_in
+
+    return sorted(values_in(metadata))
 
 
 # --- the judge's own negative control ----------------------------------------

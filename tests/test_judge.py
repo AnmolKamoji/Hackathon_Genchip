@@ -325,7 +325,7 @@ def test_every_graded_answer_is_written_to_the_transcript(tmp_path):
 
     record = saved[0]
     for field in ("question", "verdict", "reply", "axis", "file", "model",
-                  "metadata_digest"):
+                  "grounding_values"):
         assert field in record, field
     assert record["file"] == AN2D1.name
     assert record["reply"], "the answer text itself must be kept, not just the verdict"
@@ -371,21 +371,42 @@ def test_the_transcript_survives_a_killed_run(tmp_path):
     assert all(line.startswith("{") and line.endswith("}") for line in lines)
 
 
-def test_the_stored_digest_is_enough_to_recheck_grounding(tmp_path):
-    """Grounding is checked against the metadata, so a re-grade needs it stored.
+def test_the_stored_values_cover_every_metadata_block(tmp_path):
+    """A re-grade must accept every number the live run would have accepted.
 
-    Storing all of it would make each line enormous; storing none would make the
-    grounding axis silently pass everything on a re-grade.
+    The first version stored a hand-picked list of blocks and left `connectivity`
+    out, so a re-grade failed a Haiku answer that had correctly cited
+    `connectivity.intra_layer.total_components` - the number was real, the stored
+    copy just didn't have it. Storing the derived value set instead cannot omit a
+    block, which is what this pins: every value the live metadata would allow is in
+    the saved set.
     """
+    from analyzer.layermap import default_layermap, load_lyp
+    from tools.factcheck import audit, values_in
+
     transcript = tmp_path / "run.jsonl"
     J.judge(AN2D1, use_model=False, transcript=transcript)
-    digest = J.load_transcript(transcript)[0]["metadata_digest"]
-    assert digest.get("design", {}).get("polygon_count")
-    assert digest.get("classification", {}).get("tech_parameters")
+    stored = set(J.load_transcript(transcript)[0]["grounding_values"])
 
-    from tools.factcheck import audit
-    _, ungrounded = audit("q", "There are 89 polygons and a 12 nm gate extension.",
-                          digest)
-    assert ungrounded == [], ungrounded
-    _, invented = audit("q", "There are 4242 polygons.", digest)
-    assert invented == ["4242"]
+    live = values_in(J.build_metadata(AN2D1, load_lyp(default_layermap())))
+    assert live - stored == set(), f"{len(live - stored)} values would be lost"
+
+    # The specific number that exposed the omission, and a control.
+    assert audit("q", "There are 83 connected components.", {}, stored)[1] == []
+    assert audit("q", "There are 4242 components.", {}, stored)[1] == ["4242"]
+
+
+def test_a_regrade_does_not_change_verdicts_it_should_not(tmp_path):
+    """Re-grading with unchanged graders must reproduce the original verdicts.
+
+    Any drift here means the saved state is lossy, which is exactly the bug the
+    connectivity omission caused.
+    """
+    transcript = tmp_path / "run.jsonl"
+    original = J.judge(AN2D1, use_model=False, transcript=transcript)
+    graded = {r["question"]: r["verdict"] for r in original
+              if r["verdict"] in ("PASS", "FAIL")}
+    assert J.regrade(transcript) == 0
+    saved = {r["question"]: r["verdict"] for r in J.load_transcript(transcript)}
+    for question, verdict in graded.items():
+        assert saved[question] == verdict, question
