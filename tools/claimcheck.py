@@ -303,6 +303,13 @@ class Checker:
         # Deltas, when auditing a comparison object.
         s = meta.get("summary") or {}
         self.deltas = {v for v in s.values() if isinstance(v, (int, float))}
+        # `layers_added`, `layers_modified`, `layers_with_geometry_change` and the
+        # rest are counts of layers, so a correct sentence like "4 layers had
+        # geometry changes" must be checkable against them. Without this they only
+        # reached `deltas`, and the "N layers" rule reported the true figure as
+        # unsupported - a false alarm that trains you to ignore the audit.
+        self.layer_counts |= {v for k, v in s.items()
+                              if k.startswith("layers_") and isinstance(v, int)}
         for row in meta.get("layer_changes", []):
             for k in ("polygon_delta", "via_delta", "text_delta", "area_delta_um2",
                       "polygon_count_a", "polygon_count_b", "area_um2_a", "area_um2_b"):

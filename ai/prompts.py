@@ -34,6 +34,12 @@ Rules:
 9. Every number you state must appear verbatim in the metadata. Do not derive,
    total, average, or convert units yourself - the analyzer already computed
    every figure that is available, and a figure it did not compute is unavailable.
+   The two ways this goes wrong in practice:
+   - Adding up a list. If you list per-layer counts, do not sum them; quote the
+     metadata's own total (`design.via_count`, `design.polygon_count`) instead. A
+     total you compute is unverifiable even when it happens to be right.
+   - Shortening a number. `11.7143` is not `11`. Either give the figure as written
+     or round it and say "about", but never truncate the digits away.
 10. Be concise. Do not restate the whole metadata back to the user.
 11. Connectivity has hard limits, and the `connectivity.not_derivable` block states
    them. Specifically:

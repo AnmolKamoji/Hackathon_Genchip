@@ -8,10 +8,18 @@ def _delta(a: Any, b: Any) -> Any:
 
     A missing fact (``None``) must not be coerced to 0, or an unavailable via
     count in one file turns into a fabricated "+9 vias added".
+
+    Float results are rounded to kill binary-subtraction noise. 0.00246 - 0.00216
+    evaluates to 0.0002999999999999999, and a report that says "area decreased by
+    0.0002999999999999999 um2" is claiming sixteen significant digits from a layout
+    whose database unit is a nanometre. Nine decimal places is finer than any
+    quantity these files can express (1 nm = 0.001 um, so the smallest possible
+    area step is 1e-6 um2), so this never alters a real measurement.
     """
     if a is None or b is None:
         return None
-    return b - a
+    result = b - a
+    return round(result, 9) if isinstance(result, float) else result
 
 
 def _geometry_changed(x: dict[str, Any], y: dict[str, Any]) -> bool | None:

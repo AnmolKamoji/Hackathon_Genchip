@@ -98,11 +98,30 @@ def audit(label: str, prose: str, metadata: dict) -> tuple[int, list[str]]:
             f = float(n)
         except ValueError:
             continue
-        if any(abs(f - float(a)) < 1e-9 for a in allowed
-               if re.fullmatch(r"-?\d+(?:\.\d+)?", a)):
+        # A positive figure may stand for a negative one in the data: "decreased by
+        # 0.0003" is the correct English rendering of a -0.0003 delta, and demanding
+        # the minus sign in the prose would flag correct writing as invention.
+        # Deliberately one-directional - a negative in the prose still has to be
+        # negative in the data, so a sign the data does not support is still caught.
+        # Whether the direction word matches is the claim audit's job, not this one.
+        if f >= 0 and any(abs(f + float(a)) < 1e-9 for a in allowed
+                          if re.fullmatch(r"-\d+(?:\.\d+)?", a)):
             continue
         bad.append(n)
     return len(stated), bad
+
+
+def show_failure(prose: str, bad: list[str]) -> None:
+    """Print the whole answer, flagging the lines that carry an unsupported number.
+
+    A model answer costs an API call to reproduce, so truncating the evidence to a
+    few hundred characters can mean paying again just to see where the number came
+    from. Print all of it, and mark the lines worth reading.
+    """
+    flagged = {b for b in bad}
+    for line in prose.splitlines():
+        hit = any(n in flagged for n in numbers_in(line))
+        print(("    >>  " if hit else "        ") + line)
 
 
 def main() -> int:
@@ -143,7 +162,7 @@ def main() -> int:
         print(f"  {'OK ' if not bad else 'BAD'} {q}  [{n} numbers]"
               + (f"  UNSUPPORTED: {bad}" if bad else ""))
         if bad:
-            print("      " + r[:250].replace("\n", " | "))
+            show_failure(r, bad)
     r = answer_comparison(comparison, "what changed?")
     n, bad = audit("comparison", r, comparison)
     total_checked += n
@@ -169,7 +188,7 @@ def main() -> int:
             print(f"  {'OK ' if not bad else 'BAD'} {q}  [{n} numbers]"
                   + (f"  UNSUPPORTED: {bad}" if bad else ""))
             if bad:
-                print("      " + r[:400].replace("\n", "\n      "))
+                show_failure(r, bad)
 
         r = generate_comparison(comparison)
         if not looks_like_failure(r):
@@ -179,7 +198,7 @@ def main() -> int:
             print(f"  {'OK ' if not bad else 'BAD'} comparison narrative  [{n} numbers]"
                   + (f"  UNSUPPORTED: {bad}" if bad else ""))
             if bad:
-                print("      " + r[:600].replace("\n", "\n      "))
+                show_failure(r, bad)
 
     print(f"\n{'='*74}")
     print(f"numbers checked: {total_checked}   unsupported: {total_bad}")

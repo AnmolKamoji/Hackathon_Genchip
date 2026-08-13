@@ -15,18 +15,34 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
+# Everything the code reads to choose a provider, a model or an effort level. Any of
+# these arriving from the developer's .env changes what the tests measure.
+CONFIG_VARS = (
+    "LLM_PROVIDER",
+    "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL", "ANTHROPIC_EFFORT",
+    "OPENAI_API_KEY", "OPENAI_MODEL",
+    "OLLAMA_MODEL", "OLLAMA_HOST", "OLLAMA_THINK", "OLLAMA_KEEP_ALIVE",
+)
+
+
 @pytest.fixture(autouse=True)
 def _isolate_environment():
-    """Restore os.environ after every test.
+    """Give every test the same empty configuration, then restore the process.
 
-    The end-to-end tests execute app.py, which calls load_dotenv() and so loads
-    ANTHROPIC_API_KEY into the process. That leaked into every test that ran
-    afterwards and silently changed the provider chain and the prompt budget, so
-    the llm tests passed alone and failed in the suite. Ordering-dependent tests
-    are worse than none, hence restoring the environment here rather than in the
-    one file that happens to trigger it.
+    Two separate leaks made these tests ordering-dependent. app.py calls
+    load_dotenv() when the end-to-end tests execute it, and tools/factcheck.py calls
+    it at *import* time, which is collection - before this fixture can snapshot
+    anything. Restoring afterwards was therefore not enough: the .env values were
+    already in the snapshot, and ANTHROPIC_MODEL=claude-sonnet-5 silently replaced
+    the default the model-selection tests assert on.
+
+    So clear the configuration as well as restoring it. A test that wants a key or a
+    model sets it explicitly with monkeypatch, which is the only way it should ever
+    be true - a suite whose result depends on the developer's .env is not a suite.
     """
     saved = dict(os.environ)
+    for name in CONFIG_VARS:
+        os.environ.pop(name, None)
     try:
         yield
     finally:

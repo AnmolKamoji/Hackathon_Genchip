@@ -69,3 +69,41 @@ def test_identical_inputs_produce_no_deltas():
     assert c["summary"]["layers_added"] == 0
     assert c["summary"]["layers_removed"] == 0
     assert c["summary"]["layers_modified"] == 0
+
+
+def test_area_deltas_carry_no_float_subtraction_noise():
+    """A delta must not claim more precision than the database unit allows.
+
+    0.00246 - 0.00216 evaluates to 0.0002999999999999999 in binary floating point.
+    Reported verbatim, that tells the engineer the area changed by a figure known to
+    sixteen significant digits, in a layout whose grid is one nanometre - and the
+    model quotes the metadata verbatim by design, so the noise reaches the answer.
+    """
+    import json
+    import re
+
+    a = analyze_pair(SAMPLES / "DCAP0_1_RT_4.gds", SAMPLES / "DCAP0_1_RT_4.json")
+    b = analyze_pair(SAMPLES / "DCAP0_2_RT_4.gds", SAMPLES / "DCAP0_2_RT_4.json")
+    c = compare_metadata(a, b)
+
+    noisy = sorted(set(re.findall(r"-?\d+\.\d{10,}", json.dumps(c))))
+    assert not noisy, f"float noise in the comparison digest: {noisy}"
+
+    m0 = next(r for r in c["layer_changes"] if r["name"] == "M0")
+    assert m0["area_delta_um2"] == -0.0003
+
+
+def test_delta_rounding_does_not_alter_real_measurements():
+    """The rounding must be finer than anything the files can express.
+
+    One nanometre is 0.001 um, so the smallest area step is 1e-6 um2. If the rounding
+    were ever coarse enough to swallow a real change, this would catch it.
+    """
+    from analyzer.comparison import _delta
+
+    assert _delta(1.0, 1.000001) == 1e-6            # the smallest real area step
+    assert _delta(0.00246, 0.00216) == -0.0003      # the noise case
+    assert _delta(None, 5) is None                  # still no fabricated zero
+    assert _delta(5, None) is None
+    assert _delta(3, 10) == 7                       # ints stay ints
+    assert isinstance(_delta(3, 10), int)
