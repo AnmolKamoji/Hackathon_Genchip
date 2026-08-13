@@ -213,3 +213,34 @@ def test_a_geometry_only_payload_still_opens(outlines):
     assert payload["tracks"] == {}
     assert payload["tree"] == {}
     assert payload["netsAvailable"] is False
+
+
+# --- the comparison summary -------------------------------------------------
+
+def test_the_comparison_summary_carries_the_analyzers_own_numbers(lm, tmp_path):
+    """Guessed key names made every area None, and a missing row is not noticed.
+
+    This pins the payload to the analyzer's summary rather than to a shape the
+    viewer hopes for: if `xor_diff` renames a key, this fails instead of the
+    difference browser quietly losing its areas.
+    """
+    from analyzer.edit import apply_edits
+    from analyzer.xor_diff import xor_compare
+    from ui.viewer_data import build_comparison
+
+    edited = tmp_path / "edited.gds"
+    apply_edits(GDS, [{"op": "insert", "layer": "M2",
+                       "points": [[0.2, 0.2], [0.2, 0.23], [0.24, 0.23], [0.24, 0.2]]}],
+                edited, layermap=lm)
+    result = xor_compare(GDS, edited, lm)
+    payload = build_comparison(result,
+                               build(shape_outlines(GDS, lm)),
+                               build(shape_outlines(edited, lm)))
+    summary = result["summary"]
+    assert payload["summary"]["xorAreaUm2"] == summary["total_xor_area_um2"]
+    assert payload["summary"]["addedAreaUm2"] == summary["total_area_added_um2"]
+    assert payload["summary"]["removedAreaUm2"] == summary["total_area_removed_um2"]
+    assert payload["summary"]["layersChanged"] == summary["layers_changed"]
+    # And they are real numbers, not None dressed up as a missing row.
+    assert payload["summary"]["xorAreaUm2"] > 0
+    assert payload["summary"]["regionCount"] == len(payload["regions"]) >= 1

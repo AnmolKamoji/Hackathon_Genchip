@@ -172,9 +172,13 @@ def build_comparison(xor: dict[str, Any], a_payload: dict[str, Any],
         "summary": {
             "layersChanged": summary.get("layers_changed"),
             "layersCompared": summary.get("layers_compared"),
-            "xorAreaUm2": summary.get("xor_area_um2"),
-            "removedAreaUm2": summary.get("removed_area_um2"),
-            "addedAreaUm2": summary.get("added_area_um2"),
+            # These are the analyzer's own key names. Guessing shorter ones made
+            # every area read None, so the difference browser quietly showed no
+            # areas at all - a wrong number would have been noticed; a missing row
+            # was not.
+            "xorAreaUm2": summary.get("total_xor_area_um2"),
+            "removedAreaUm2": summary.get("total_area_removed_um2"),
+            "addedAreaUm2": summary.get("total_area_added_um2"),
             "regionCount": len(regions),
         },
         "names": {"a": a_payload.get("file") or "A", "b": b_payload.get("file") or "B"},

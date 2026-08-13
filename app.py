@@ -623,10 +623,13 @@ def _diff_against_upload(upload, edited: bytes) -> str | None:
     summary = result.get("summary") or {}
     changed = summary.get("layers_changed")
     if not changed:
-        return "no geometric difference from the upload"
-    return (f"{changed} layer(s) differ, {um2(summary.get('xor_area_um2') or 0, 3)} "
-            f"of XOR area — {um2(summary.get('removed_area_um2') or 0, 3)} removed, "
-            f"{um2(summary.get('added_area_um2') or 0, 3)} added")
+        # Merged geometry per layer, which is what gets manufactured: a shape drawn
+        # inside another one on the same layer really is no difference.
+        return "no difference in the merged geometry of any layer"
+    return (f"{changed} layer(s) differ, "
+            f"{um2(summary.get('total_xor_area_um2') or 0, 4)} of XOR area — "
+            f"{um2(summary.get('total_area_removed_um2') or 0, 4)} removed, "
+            f"{um2(summary.get('total_area_added_um2') or 0, 4)} added")
 
 
 def _handle_edit_event(event: dict | None, upload, name: str) -> None:
