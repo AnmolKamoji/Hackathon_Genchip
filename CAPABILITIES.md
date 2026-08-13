@@ -342,6 +342,55 @@ JavaScript error or `console.error` fails the test that provoked it.
 
 ---
 
+## 27. Editing the layout
+
+The viewer can change a layout and write a new GDSII. The division of labour is the
+same one the rest of the tool uses: **the browser records what you did; KLayout
+writes the file.** Nothing in between guesses.
+
+An edit names the shape it changes — the cell it lives in, its outline in *that
+cell's* own database units, and its rank among identical siblings — so a journal
+applied to a file that has moved on is refused rather than applied to the wrong
+polygon. Applying is atomic: one bad operation writes nothing.
+
+**Why it is not done in JavaScript.** A polygon on a canvas is a float; a polygon in
+a GDSII is an integer on the database grid. Rounding one to the other in the browser
+puts off-grid vertices in the file, which is how a layout stops being manufacturable
+without anything looking wrong. And every shape the viewer draws was flattened
+through the hierarchy, so the rectangle under the pointer may live in a child cell
+shared by twenty placements — editing it by screen position would silently change all
+twenty. A displacement asked for in screen coordinates is rotated into the cell's own
+frame before it is written, or a 90° instance moves sideways.
+
+**Tools.** Select (click, shift-click, rubber band), move (drag or arrow keys by the
+grid step), rectangle, polygon, wire (a centre line plus the width the layer already
+measures), label, vertex and edge handles, rotate, mirror, copy, paste, duplicate,
+step-and-repeat, merge, subtract, delete, cell placement including arrays, undo/redo,
+and `Ctrl+S` to apply. Snapping goes to edges and vertices first, then to the
+**routing tracks** read off the track-guide layers, then to the design grid.
+
+**Four things KLayout does not do:**
+
+| | |
+|---|---|
+| Checks follow the edit | Applying re-runs the design rule check, connectivity, pitch and classification on the file that was just written, so the markers beside the drawing describe what you made. |
+| The write reports itself | Every apply says how the file now differs from the one you uploaded, measured by the same XOR the comparison page uses. |
+| Off-grid is caught | Vertices *this edit* added off the grid you were drawing on are counted and named, separately from the ones the file already had. |
+| Shared cells warn first | An edit to a cell placed more than once says how many placements it reaches — before it is made. |
+
+The upload is never modified. An edited file lives in the session, is offered as a
+download, and can be reverted in one click.
+
+**Verification.** 37 engine tests cover the operations and, more importantly, the
+refusals: a stale target, a target whose file has moved on, an unknown layer, a
+degenerate polygon, a self-placement, an array with no step, and a batch where one
+operation fails and nothing is written. A round-trip test drives the real editor in
+headless Chromium, applies the journal it produced with KLayout, and compares the
+written file against the browser's preview **polygon by polygon across 34 layers** —
+the one assertion that catches the two sides drifting apart.
+
+---
+
 ## Verification standard used
 
 Every numeric claim in this document was checked against a **separately written**
