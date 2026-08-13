@@ -1,0 +1,306 @@
+/* Viewer chrome.
+ *
+ * The toolbar is a normal element in the layout, above the canvas and always
+ * visible. The Plotly version put its modebar in a hover-reveal overlay outside
+ * the plot's hover region, so moving the pointer toward a button ended the hover
+ * that produced it and the menu vanished. Nothing here appears on hover.
+ */
+:root {
+  --gv-bg: #0b0f14;
+  --gv-panel: #0f151c;
+  --gv-line: #1e2936;
+  --gv-text: #c9d4e0;
+  --gv-dim: #7d8b9c;
+  --gv-accent: #58a6ff;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--gv-bg);
+  color: var(--gv-text);
+  font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  overflow: hidden;
+}
+
+.gv-root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  border: 1px solid var(--gv-line);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--gv-bg);
+}
+
+/* ---- toolbar ---- */
+
+.gv-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 7px 10px;
+  background: linear-gradient(180deg, #131b24, #0f151c);
+  border-bottom: 1px solid var(--gv-line);
+  flex: 0 0 auto;
+}
+
+.gv-group {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding-right: 12px;
+  border-right: 1px solid var(--gv-line);
+}
+.gv-group:last-child { border-right: 0; padding-right: 0; }
+
+.gv-glabel {
+  font-size: 10px;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+  color: var(--gv-dim);
+  margin-right: 5px;
+  user-select: none;
+}
+
+.gv-btn {
+  min-width: 30px;
+  height: 27px;
+  padding: 0 8px;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--gv-text);
+  background: #18212c;
+  border: 1px solid #26333f;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background .12s, border-color .12s, color .12s;
+}
+.gv-btn:hover:not(:disabled) { background: #22303e; border-color: #37475a; }
+.gv-btn:active:not(:disabled) { transform: translateY(1px); }
+.gv-btn:disabled { opacity: .34; cursor: default; }
+.gv-btn.gv-on {
+  background: rgba(88,166,255,.18);
+  border-color: var(--gv-accent);
+  color: #dce9ff;
+}
+.gv-btn.gv-primary {
+  background: rgba(88,166,255,.16);
+  border-color: #2f5d94;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.gv-slider { width: 78px; accent-color: var(--gv-accent); cursor: pointer; }
+
+/* ---- body ---- */
+
+.gv-body { display: flex; flex: 1 1 auto; min-height: 0; }
+
+.gv-stage { position: relative; flex: 1 1 auto; min-width: 0; }
+
+.gv-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+  touch-action: none;      /* pointer events must not be eaten by scroll gestures */
+}
+
+.gv-readout {
+  position: absolute;
+  left: 10px;
+  top: 8px;
+  display: flex;
+  gap: 12px;
+  padding: 4px 9px;
+  font: 11px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--gv-text);
+  background: rgba(11,15,20,.82);
+  border: 1px solid var(--gv-line);
+  border-radius: 6px;
+  pointer-events: none;
+}
+
+.gv-scalebar {
+  position: absolute;
+  right: 12px;
+  bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font: 11px ui-monospace, monospace;
+  color: var(--gv-text);
+  background: rgba(11,15,20,.82);
+  padding: 4px 8px;
+  border: 1px solid var(--gv-line);
+  border-radius: 6px;
+  pointer-events: none;
+}
+.gv-sbar {
+  height: 7px;
+  border: 1px solid var(--gv-text);
+  border-top: 0;
+}
+
+.gv-tip {
+  position: absolute;
+  padding: 6px 9px;
+  font: 11px/1.5 ui-monospace, monospace;
+  background: rgba(9,13,18,.96);
+  border: 1px solid #2b3a4a;
+  border-radius: 6px;
+  pointer-events: none;
+  white-space: nowrap;
+  z-index: 6;
+  box-shadow: 0 6px 18px rgba(0,0,0,.45);
+}
+
+.gv-swipe {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 14px;
+  margin-left: -7px;
+  cursor: ew-resize;
+  z-index: 5;
+}
+.gv-swipe::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  width: 8px;
+  height: 34px;
+  margin-top: -17px;
+  background: var(--gv-accent);
+  border-radius: 4px;
+  opacity: .85;
+}
+
+.gv-help {
+  position: absolute;
+  right: 14px;
+  top: 14px;
+  z-index: 9;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px 16px;
+  padding: 12px 14px;
+  font-size: 11px;
+  background: rgba(9,13,18,.97);
+  border: 1px solid #2b3a4a;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.gv-help b { grid-column: 1 / -1; margin-bottom: 3px; }
+.gv-help .gv-dim { grid-column: 1 / -1; margin-top: 6px; max-width: 260px; }
+kbd {
+  display: inline-block;
+  min-width: 15px;
+  padding: 0 4px;
+  font: 10px ui-monospace, monospace;
+  text-align: center;
+  background: #1b2530;
+  border: 1px solid #33445a;
+  border-bottom-width: 2px;
+  border-radius: 3px;
+}
+
+/* ---- layer panel ---- */
+
+.gv-panel {
+  flex: 0 0 232px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--gv-panel);
+  border-left: 1px solid var(--gv-line);
+}
+
+.gv-phead {
+  display: flex;
+  justify-content: space-between;
+  padding: 9px 11px 7px;
+  font-size: 10px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--gv-dim);
+  border-bottom: 1px solid var(--gv-line);
+}
+.gv-count { color: var(--gv-text); }
+
+.gv-quick { display: flex; gap: 4px; padding: 8px 8px 4px; }
+.gv-quick .gv-btn { flex: 1; font-size: 11px; }
+
+.gv-search {
+  margin: 4px 8px 8px;
+  padding: 5px 8px;
+  font-size: 12px;
+  color: var(--gv-text);
+  background: #131c25;
+  border: 1px solid #26333f;
+  border-radius: 6px;
+  outline: none;
+}
+.gv-search:focus { border-color: var(--gv-accent); }
+
+.gv-layers { flex: 1 1 auto; overflow-y: auto; padding: 0 4px 6px; }
+.gv-layers::-webkit-scrollbar { width: 8px; }
+.gv-layers::-webkit-scrollbar-thumb { background: #26333f; border-radius: 4px; }
+
+.gv-lrow {
+  display: grid;
+  grid-template-columns: 15px 11px 1fr auto auto 18px;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: 5px;
+  font-size: 11.5px;
+}
+.gv-lrow:hover { background: #16202b; }
+.gv-lrow.gv-soloed { background: rgba(88,166,255,.13); }
+.gv-lrow input[type=checkbox] { accent-color: var(--gv-accent); cursor: pointer; margin: 0; }
+
+.gv-sw { width: 11px; height: 11px; border-radius: 2px; border: 1px solid rgba(255,255,255,.28); }
+.gv-lname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gv-ld { font: 10px ui-monospace, monospace; color: var(--gv-dim); }
+.gv-n { font: 10px ui-monospace, monospace; color: var(--gv-dim); min-width: 14px; text-align: right; }
+
+.gv-solo {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  font-size: 9px;
+  color: var(--gv-dim);
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.gv-solo:hover { color: var(--gv-accent); background: #1d2835; }
+
+.gv-info {
+  flex: 0 0 auto;
+  max-height: 44%;
+  overflow-y: auto;
+  padding: 8px 11px 11px;
+  border-top: 1px solid var(--gv-line);
+  font-size: 11.5px;
+}
+.gv-isec {
+  margin: 6px 0 4px;
+  font-size: 10px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--gv-dim);
+}
+.gv-irow { display: flex; justify-content: space-between; gap: 10px; padding: 1.5px 0; }
+.gv-irow span { color: var(--gv-dim); }
+.gv-irow b { font: 11px ui-monospace, monospace; }
+.gv-mrow b { color: #f0b429; }
+.gv-dim { color: var(--gv-dim); }
+.gv-hint { color: var(--gv-dim); line-height: 1.6; }

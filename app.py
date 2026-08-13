@@ -31,6 +31,8 @@ from analyzer.techparams import (compare_to_reference, find_reference,
                                 load_reference, tech_parameters)
 from ui.theme import (CSS, chips, hint, section, style_figure, swatch,
                       verdict_html)
+from ui.workspace import (clear_focus, compare_panel, focus_request, layout_panel,
+                          pick_pair, workspace)
 
 # Explicit path: the no-argument form finds .env by inspecting the call stack,
 # which raises when app.py is executed in an embedded or exec'd context.
@@ -330,92 +332,17 @@ if len(metadata_list) == 2 and len(sources) > 1:
     )
 
 
-def render_layout_view(outlines: dict, key: str, colours: dict) -> None:
-    """One layout drawn KLayout-style, with a layer panel and measured dimensions.
+def render_layout_view(outlines: dict, key: str, colours: dict, title: str = "") -> None:
+    """One layout in the interactive viewer.
 
-    The same arrangement as the difference map - canvas left, layer list right - so
-    the two views are operated identically rather than each having its own idiom.
+    Replaces the Plotly figure with a canvas component. The change that matters is
+    not the renderer: it is that the layer panel, the zoom and the ruler now live
+    inside the component, so none of them re-runs the script. Every toggle used to
+    rebuild the whole figure, which is why the view jumped and the toolbar - a
+    hover-revealed Plotly modebar sitting outside the plot's own hover region -
+    disappeared as soon as the pointer moved toward it.
     """
-    rows = [r for r in outlines["layers"] if r["shape_count"] or r["label_count"]]
-    if not rows:
-        st.info("This layout contains no drawable geometry.")
-        return
-    for w in outlines.get("warnings", []):
-        st.warning(w)
-
-    canvas, panel = st.columns([4.4, 1], gap="small")
-    with panel:
-        st.markdown(f'<div class="lp-head"><span>Layers</span><span>{len(rows)}</span></div>',
-                    unsafe_allow_html=True)
-        quick = st.columns(2)
-        # Default to the layers that carry unique geometry: a standard cell has more
-        # pin/label/guide copies than real layers, and showing all of them at once
-        # is unreadable.
-        primary = {r["name"] for r in rows if r["role"] != "derived"} or {r["name"] for r in rows}
-        if quick[0].button("All", key=f"{key}_all", width="stretch"):
-            for r in rows:
-                st.session_state[f"{key}_v_{r['name']}"] = True
-        if quick[1].button("Drawing", key=f"{key}_prim", width="stretch",
-                           help="Only the layers with unique geometry — hides pin, label, "
-                                "duplicate and track-guide copies."):
-            for r in rows:
-                st.session_state[f"{key}_v_{r['name']}"] = r["name"] in primary
-
-        st.markdown('<div class="layer-panel">', unsafe_allow_html=True)
-        picked: list[str] = []
-        for r in rows:
-            state_key = f"{key}_v_{r['name']}"
-            st.session_state.setdefault(state_key, r["name"] in primary)
-            extent = r.get("extent")
-            tip = f"{r['layer']}/{r['datatype']} · {r['role']} · {r['shape_count']} shape(s)"
-            if extent:
-                tip += f" · extent {nm(extent['width_um'])} × {nm(extent['height_um'])}"
-            if r["label_count"]:
-                tip += f" · {r['label_count']} label(s)"
-            on = st.checkbox(r["name"], key=state_key, help=tip)
-            st.markdown(
-                f'<div class="lp-row" style="margin:-22px 0 4px 26px">'
-                f'{swatch(r.get("colour") or colours.get(r["name"]))}'
-                f'<span class="ld">{r["layer"]}/{r["datatype"]}</span>'
-                f'<span class="n">{r["shape_count"] or r["label_count"]}</span></div>',
-                unsafe_allow_html=True)
-            if on:
-                picked.append(r["name"])
-        st.markdown('</div>', unsafe_allow_html=True)
-        show_labels = st.toggle("Labels", value=True, key=f"{key}_labels")
-        show_dims = st.toggle("Dimensions", value=True, key=f"{key}_dims",
-                              help="Annotate the cell extent on the drawing.")
-
-    with canvas:
-        fig = style_figure(layout_view(outlines, only_layers=set(picked),
-                                       show_labels=show_labels,
-                                       show_dimensions=show_dims,
-                                       fallback_colours=colours))
-        if fig is None:
-            st.info("No layers selected — use **All** or **Drawing** in the layer panel.")
-            return
-        st.plotly_chart(fig, width="stretch", key=f"{key}_fig")
-        st.markdown(hint(
-            "Hover any shape for its <b>width × height</b>, area and position — no ruler "
-            "needed. Drag to zoom · double-click to reset · click a layer in the legend "
-            "to hide it."), unsafe_allow_html=True)
-
-        # The measurements a reviewer would otherwise take by hand.
-        st.markdown(section("Measured extents"), unsafe_allow_html=True)
-        table = [{
-            "layer": r["name"], "l/d": f"{r['layer']}/{r['datatype']}",
-            "shapes": r["shape_count"],
-            "extent": (f"{nm(r['extent']['width_um'])} × {nm(r['extent']['height_um'])}"
-                       if r["extent"] else "—"),
-            "narrowest shape": (nm(min(s["width_um"] for s in r["shapes"]))
-                                if r["shapes"] else "—"),
-            "shortest shape": (nm(min(s["height_um"] for s in r["shapes"]))
-                               if r["shapes"] else "—"),
-            "labels": str(r["label_count"]) if r["label_count"] else "—",
-        } for r in rows if r["name"] in set(picked)]
-        st.dataframe(pd.DataFrame(table), width="stretch", hide_index=True,
-                     key=f"{key}_extents")
-
+    layout_panel(outlines, key=key, colours=colours, title=title)
 
 def render_connectivity(conn: dict | None, idx: int) -> None:
     """The connectivity tab. Extracted so the per-layout panel stays readable."""
@@ -558,6 +485,7 @@ _cell_bbox = ([_bbox["left"] * _dbu, _bbox["bottom"] * _dbu,
                _bbox["right"] * _dbu, _bbox["top"] * _dbu] if _bbox else None)
 # The technology's own colour per layer, so the panel swatches and the map agree
 # with what the engineer sees in KLayout.
+_idx_of = {u.name: n for n, u in enumerate(uploads)}
 _layer_colours = {e["technology_name"]: e.get("fill_color")
                   for e in (layermap or {}).get("by_key", {}).values()
                   if e.get("fill_color")}
@@ -639,20 +567,24 @@ if len(uploads) >= 2:
                          "layout viewer does. Off: one colour per file, the diff convention.")
 
             with canvas:
-                fig = style_figure(difference_map(
-                    detail, _cell_bbox, only_layers=set(picked),
-                    colour_by="layer" if by_layer else "file",
-                    layer_colours=_layer_colours))
-                if fig is not None:
-                    st.plotly_chart(fig, width="stretch", key="diffmap")
+                # Both layouts in one interactive view, with the differing regions
+                # drawn on top. The old figure could only show the regions - you
+                # could see *that* something changed but not what it sat in, so
+                # every finding meant opening KLayout to get the context back.
+                oa, ea = process_outlines(uploads[_idx_of[pair["a"]]].getvalue(),
+                                          pair["a"], layermap, conn_stack)
+                ob, eb = process_outlines(uploads[_idx_of[pair["b"]]].getvalue(),
+                                          pair["b"], layermap, conn_stack)
+                if ea or eb or not oa or not ob:
+                    st.error(f"Could not read the geometry for drawing: {ea or eb}")
+                else:
+                    compare_panel(detail, oa, ob, _layer_colours,
+                                  pair["a"], pair["b"], key="cmp")
                     st.markdown(hint(
-                        ("Solid outline = only in the first layout, dotted = only in the second."
-                         if by_layer else
-                         "Each region exists in one layout and not the other.")
-                        + " Hover for size and position · drag to zoom · double-click to reset."),
-                        unsafe_allow_html=True)
-                elif not picked:
-                    st.info("No layers selected — use **All** in the layer panel to restore them.")
+                        "<b>A</b>/<b>B</b> show one layout, <b>A+B</b> overlays them, "
+                        "<b>XOR</b> leaves only the differences, and the wipe and blink "
+                        "tools compare them in place. Red is only in the first file, "
+                        "green only in the second."), unsafe_allow_html=True)
 
             # 4. What to look at first, largest difference first.
             st.markdown(section("Largest differences — biggest first"),
@@ -759,6 +691,67 @@ if len(uploads) >= 2:
 
 # --- per-file detail, collapsed: needed sometimes, not first ------------------
 st.divider()
+def answer_for(question: str, metadata: dict, history: list | None = None) -> str:
+    """Answer one question, deterministic first and the model only as a fallback.
+
+    Shared by the page chat and the expanded workspace so both give the same answer
+    to the same question - the alternative is two ladders that drift apart, and the
+    user discovering that the big view is less accurate than the small one.
+    """
+    if is_comparison_question(question) and _xor_for_chat is not None:
+        reply = answer_xor(_xor_for_chat, question)
+        if reply:
+            return reply
+    if comparison is not None and is_comparison_question(question):
+        reply = answer_comparison(comparison, question)
+        if reply:
+            return reply
+    reply = deterministic_answer(metadata, question)
+    if reply:
+        return reply
+    context = ({"comparison": comparison}
+               if (comparison and is_comparison_question(question)) else metadata)
+    return ask_llm(context, question, history=history or [])
+
+
+
+# --- expanded workspace ----------------------------------------------------
+# Rendered before the page body and then the script stops, so the workspace is
+# the whole screen rather than something appended below a page the user has to
+# scroll past. It reuses the same panels as the inline views: one viewer, one
+# answering path, so the big view cannot disagree with the small one.
+_focus = focus_request()
+if _focus:
+    def _render_focus() -> None:
+        if _focus["kind"] == "compare":
+            oa, ea = process_outlines(uploads[_idx_of[_focus["a"]]].getvalue(),
+                                      _focus["a"], layermap, conn_stack)
+            ob, eb = process_outlines(uploads[_idx_of[_focus["b"]]].getvalue(),
+                                      _focus["b"], layermap, conn_stack)
+            if ea or eb or not oa or not ob:
+                st.error(f"Could not read the geometry: {ea or eb}")
+                return
+            xor_detail = _xor_for_chat if isinstance(_xor_for_chat, dict) else {}
+            compare_panel(xor_detail, oa, ob, _layer_colours, _focus["a"], _focus["b"],
+                          key="ws_cmp", height=760, expandable=False)
+        else:
+            name = _focus.get("title") or uploads[0].name
+            outlines, error = process_outlines(
+                uploads[_idx_of.get(name, 0)].getvalue(), name, layermap, conn_stack)
+            if error or not outlines:
+                st.error(f"Could not read the geometry: {error}")
+                return
+            layout_panel(outlines, key="ws_lv", colours=_layer_colours, title=name,
+                         height=760, expandable=False)
+
+    _focus_meta = next((m for m in metadata_list
+                        if m["source"]["file"] == (_focus.get("title") or _focus.get("a"))),
+                       metadata_list[0])
+    workspace(_focus, _render_focus,
+              lambda q: answer_for(q, _focus_meta,
+                                   history=st.session_state.get("ws_chat", [])[-6:]))
+    st.stop()
+
 st.markdown(section("Per-layout detail"), unsafe_allow_html=True)
 
 MODE_LABEL = {
@@ -961,7 +954,7 @@ for idx, metadata in enumerate(metadata_list):
             if outline_error:
                 st.error(f"Could not read the geometry for drawing: {outline_error}")
             elif outlines:
-                render_layout_view(outlines, f"lv{idx}", _layer_colours)
+                render_layout_view(outlines, f"lv{idx}", _layer_colours, title=uploads[idx].name)
 
         with tabs[1]:
             drc, drc_error = process_drc(uploads[idx].getvalue(), uploads[idx].name,
@@ -1086,6 +1079,7 @@ if len(metadata_list) == 2:
         "Comparison questions (\"what changed?\") use both files."
     )
 
+
 if "chat" not in st.session_state:
     st.session_state.chat = []
 
@@ -1101,21 +1095,7 @@ if question:
 
     metadata = metadata_list[0]
     with st.chat_message("assistant"):
-        reply = None
-        # A comparison question needs both files. The XOR result answers it with
-        # geometry and locations, so it is tried before the count-based diff.
-        reply = None
-        if is_comparison_question(question) and _xor_for_chat is not None:
-            reply = answer_xor(_xor_for_chat, question)
-        if reply is None and comparison is not None and is_comparison_question(question):
-            reply = answer_comparison(comparison, question)
-        if reply is None:
-            reply = deterministic_answer(metadata, question)
-        if reply is None:
-            context = {"comparison": comparison} if (comparison and is_comparison_question(question)) else metadata
-            with st.spinner("Analyzing..."):
-                # Pass prior turns so follow-ups like "and the second one?" work.
-                reply = ask_llm(context, question, history=st.session_state.chat[:-1][-6:])
+        reply = answer_for(question, metadata, history=st.session_state.chat[:-1][-6:])
         st.markdown(reply)
     st.session_state.chat.append({"role": "assistant", "content": reply})
 

@@ -111,3 +111,42 @@ def test_the_metal_solution_metric_reports_the_capability(rendered):
     assert labels.get("Routing") == "3 metal", labels
     table = _parameter_table(rendered)
     assert table["Routing Capability"]["Measured"] == "Three Metal Solution"
+
+
+# --- the interactive viewer and the expanded workspace ----------------------
+
+def test_the_layout_tab_renders_the_interactive_viewer(rendered):
+    """AppTest cannot see inside an iframe, so this asserts on what it can see: the
+    panel's own controls. The drawing itself is covered by the browser suite."""
+    labels = [b.label for b in rendered.button]
+    assert any("Expand" in label for label in labels), labels
+
+
+def test_expanding_a_layout_opens_the_workspace_with_the_chat(monkeypatch):
+    """Clicking Expand must give the full-screen view, not append one below."""
+    import streamlit as st
+    from streamlit.testing.v1 import AppTest
+
+    def fake_uploader(label, *args, **kwargs):
+        if "connection stack" in label:
+            return _Upload(SAMPLES / "Titan_stack.json")
+        if "GDS" in label:
+            return [_Upload(SAMPLES / "AN2D1_2_RT_4.gds")]
+        if "sidecar" in label:
+            return []
+        if ".lyp" in label:
+            return _Upload(SAMPLES / "Titan_layer_properties.lyp")
+        return None
+
+    monkeypatch.setattr(st, "file_uploader", fake_uploader)
+    at = AppTest.from_file(str(APP), default_timeout=900)
+    at.session_state["gv_focus"] = {"kind": "layout", "key": "lv0",
+                                    "title": "AN2D1_2_RT_4.gds"}
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+
+    # The workspace renders its own chat input and a way back.
+    assert any("Back" in b.label for b in at.button), [b.label for b in at.button]
+    assert at.chat_input, "the workspace has no chat box"
+    # And it stops before the page body: the per-layout tabs must not be there.
+    assert not at.tabs, "the workspace rendered on top of the full page"
