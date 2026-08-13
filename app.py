@@ -63,16 +63,23 @@ with st.sidebar:
         st.caption("Local models: " + ", ".join(status["models"]))
     st.caption("Numbers never come from the model. It only rephrases the metadata computed here.")
 
-uploads = st.file_uploader("Upload GDS files — any number; every pair is compared",
-                           type=["gds"], accept_multiple_files=True)
-sidecars = st.file_uploader("Optional semantic JSON sidecars", type=["json"], accept_multiple_files=True)
-lyp_upload = st.file_uploader(
-    "KLayout layer map (.lyp) — the bundled technology map is used unless you upload one",
-    type=["lyp"], accept_multiple_files=False)
-stack_upload = st.file_uploader(
-    "Optional connection stack (.json) — the one thing a .gds and .lyp cannot supply, "
-    "needed for the net graph",
-    type=["json"], accept_multiple_files=False, key="stack_upload")
+# The uploaders have to render to yield their values, so they cannot be skipped
+# when the workspace is open - but they can be folded away, which is what keeps the
+# expanded view at the top of the screen instead of below four file pickers.
+_files_box = (st.expander("Files", expanded=False)
+              if st.session_state.get("gv_focus") else st.container())
+with _files_box:
+    uploads = st.file_uploader("Upload GDS files — any number; every pair is compared",
+                               type=["gds"], accept_multiple_files=True)
+    sidecars = st.file_uploader("Optional semantic JSON sidecars", type=["json"],
+                                accept_multiple_files=True)
+    lyp_upload = st.file_uploader(
+        "KLayout layer map (.lyp) — the bundled technology map is used unless you upload one",
+        type=["lyp"], accept_multiple_files=False)
+    stack_upload = st.file_uploader(
+        "Optional connection stack (.json) — the one thing a .gds and .lyp cannot supply, "
+        "needed for the net graph",
+        type=["json"], accept_multiple_files=False, key="stack_upload")
 
 if not uploads:
     st.markdown("### Try the included reference files")
@@ -490,207 +497,6 @@ _layer_colours = {e["technology_name"]: e.get("fill_color")
                   for e in (layermap or {}).get("by_key", {}).values()
                   if e.get("fill_color")}
 
-if len(uploads) >= 2:
-    xor_result, xor_error = run_xor(
-        tuple(u.name for u in uploads), tuple(u.getvalue() for u in uploads),
-        layermap, st.session_state.get("xor_tol", 0.0), conn_stack)
-
-    if xor_error:
-        st.error(f"XOR comparison failed: {xor_error}")
-    elif xor_result:
-        names = xor_result["files"]
-        labels = [f"{p['a']} → {p['b']}" for p in xor_result["pairs"]]
-        pick = st.selectbox("Compare", labels, key="xor_pair",
-                            label_visibility="collapsed") if len(labels) > 1 else labels[0]
-        pair = xor_result["pairs"][labels.index(pick)]
-        detail = pair.get("detail")
-        _xor_for_chat = detail or {"comparable": False,
-                                   "reason": pair.get("reason", "unknown")}
-
-        # 1. The verdict. One line, before anything else.
-        head = headline(detail, _cell_area)
-        st.markdown(verdict_html(head["state"], head["headline"], head.get("detail", "")),
-                    unsafe_allow_html=True)
-
-        if detail and detail.get("comparable") and not detail["summary"]["identical"]:
-            s = detail["summary"]
-            # 2. Four numbers, not fourteen.
-            c = st.columns(4)
-            c[0].metric("Layers changed", f"{s['layers_changed']}/{s['layers_compared']}")
-            c[1].metric("Regions", s["difference_regions"])
-            c[2].metric("XOR area", um2(s["total_xor_area_um2"]),
-                        help="Total geometry present in one layout and not the other")
-            c[3].metric("Removed → Added",
-                        f"{um2(s['total_area_removed_um2'], 3)} → {um2(s['total_area_added_um2'], 3)}")
-
-            # 3. The picture. This is what a reviewer actually reads.
-            changed = sorted((x for x in detail["layers"] if not x["identical"]),
-                             key=lambda r: -r["xor"]["area_um2"])
-            # Map on the left, layer list on the right - the arrangement of every
-            # layout viewer, KLayout included. Controls sit beside what they affect
-            # rather than above it, so the eye does not have to travel.
-            canvas, panel = st.columns([4.4, 1], gap="small")
-
-            with panel:
-                st.markdown(
-                    '<div class="lp-head"><span>Layers</span>'
-                    f'<span>{len(changed)}</span></div>', unsafe_allow_html=True)
-                quick = st.columns(2)
-                if quick[0].button("All", key="lp_all", width="stretch"):
-                    for row in changed:
-                        st.session_state[f"lp_{row['name']}"] = True
-                if quick[1].button("None", key="lp_none", width="stretch"):
-                    for row in changed:
-                        st.session_state[f"lp_{row['name']}"] = False
-                st.markdown('<div class="layer-panel">', unsafe_allow_html=True)
-                picked: list[str] = []
-                for row in changed:
-                    colour = _layer_colours.get(row["name"])
-                    st.session_state.setdefault(f"lp_{row['name']}", True)
-                    on = st.checkbox(
-                        f"{row['name']}", key=f"lp_{row['name']}",
-                        help=(f"{row['layer']}/{row['datatype']} · {row['role']} · "
-                              f"{row['xor']['count']} region(s) · "
-                              f"{um2(row['xor']['area_um2'], 3)}"))
-                    st.markdown(
-                        f'<div class="lp-row" style="margin:-22px 0 4px 26px">'
-                        f'{swatch(colour)}<span class="ld">{row["layer"]}/'
-                        f'{row["datatype"]}</span>'
-                        f'<span class="n">{row["xor"]["count"]}</span></div>',
-                        unsafe_allow_html=True)
-                    if on:
-                        picked.append(row["name"])
-                st.markdown('</div>', unsafe_allow_html=True)
-                by_layer = st.toggle(
-                    "Technology colours", value=False, key="lp_colour_mode",
-                    help="Colour each region by its layer, using the .lyp colours, the way a "
-                         "layout viewer does. Off: one colour per file, the diff convention.")
-
-            with canvas:
-                # Both layouts in one interactive view, with the differing regions
-                # drawn on top. The old figure could only show the regions - you
-                # could see *that* something changed but not what it sat in, so
-                # every finding meant opening KLayout to get the context back.
-                oa, ea = process_outlines(uploads[_idx_of[pair["a"]]].getvalue(),
-                                          pair["a"], layermap, conn_stack)
-                ob, eb = process_outlines(uploads[_idx_of[pair["b"]]].getvalue(),
-                                          pair["b"], layermap, conn_stack)
-                if ea or eb or not oa or not ob:
-                    st.error(f"Could not read the geometry for drawing: {ea or eb}")
-                else:
-                    compare_panel(detail, oa, ob, _layer_colours,
-                                  pair["a"], pair["b"], key="cmp")
-                    st.markdown(hint(
-                        "<b>A</b>/<b>B</b> show one layout, <b>A+B</b> overlays them, "
-                        "<b>XOR</b> leaves only the differences, and the wipe and blink "
-                        "tools compare them in place. Red is only in the first file, "
-                        "green only in the second."), unsafe_allow_html=True)
-
-            # 4. What to look at first, largest difference first.
-            st.markdown(section("Largest differences — biggest first"),
-                        unsafe_allow_html=True)
-            top = findings(detail, _cell_area, limit=6)
-            st.dataframe(pd.DataFrame([{
-                "layer": f["layer"], "change": f["change"], "size": f["size"],
-                "area": um2(f["area_um2"], 3), "of cell": f["share_of_cell"],
-                "at (µm)": f"{f['at_um'][0]}, {f['at_um'][1]}"} for f in top]),
-                width="stretch", hide_index=True, key="findings")
-            st.markdown(
-                chips(("XOR geometry · exact", "exact"),
-                      ("layer roles · inferred from names", "inferred"),
-                      ("intent · requires netlist", "requires netlist"),
-                      ("rule compliance · requires PDK", "requires PDK")),
-                unsafe_allow_html=True)
-
-            # Everything else is available, but out of the way.
-            with st.expander(f"All {s['layers_changed']} changed layers, and settings"):
-                st.select_slider(
-                    "Edge-shift tolerance — differences at or below this are binned separately",
-                    options=[0.0, 0.005, 0.01, 0.02, 0.05], key="xor_tol",
-                    format_func=lambda v: "off" if not v else nm(v))
-                changed = [r for r in detail["layers"] if not r["identical"]]
-                st.dataframe(pd.DataFrame([{
-                    "layer": r["name"], "role": r["role"],
-                    "regions": r["xor"]["count"],
-                    "xor area": um2(r["xor"]["area_um2"], 3),
-                    "largest": um2(r["xor"]["largest_area_um2"], 3),
-                    "removed": r["removed"]["count"], "added": r["added"]["count"],
-                    "Δ area": um2(r["area_delta_um2"], 3),
-                    "edge shifts": r.get("at_or_below_tolerance_count"),
-                    "only in": ("B" if not r["present_in_a"] else
-                                "A" if not r["present_in_b"] else ""),
-                } for r in sorted(changed, key=lambda r: -r["xor"]["area_um2"])]),
-                    width="stretch", hide_index=True, key="xor_changed")
-
-                text_rows = [r for r in detail["layers"]
-                             if r.get("texts_added") or r.get("texts_removed")]
-                if text_rows:
-                    st.markdown("**Label changes** — no geometry impact, but LVS sees them")
-                    st.dataframe(pd.DataFrame([{
-                        "layer": r["name"],
-                        "added": ", ".join(r.get("texts_added") or []) or "—",
-                        "removed": ", ".join(r.get("texts_removed") or []) or "—",
-                    } for r in text_rows]), width="stretch", hide_index=True, key="xor_text")
-
-                st.caption(detail["mask_impact"]["caveat"])
-                st.markdown("**Not derivable from an XOR**")
-                for k, v in detail["not_derivable"].items():
-                    st.markdown(f"- *{k.replace('_', ' ')}* — {v}")
-
-        # Three or more layouts is a revision family, not a pair. The question
-        # becomes "which of these differs from the golden one, and where?", so the
-        # views are reference-based rather than pairwise.
-        if len(names) > 2:
-            st.divider()
-            st.markdown(section(f"All {len(names)} layouts — reference comparison"),
-                        unsafe_allow_html=True)
-            reference = st.selectbox(
-                "Reference layout — everything is compared back to this",
-                names, key="xor_reference",
-                help="A revision family is reviewed against one golden database.")
-
-            c = st.columns(3)
-            ref_pairs = [p for p in xor_result["pairs"]
-                         if reference in (p["a"], p["b"]) and p.get("comparable")]
-            same = [p for p in ref_pairs if p["identical"]]
-            worst = max(ref_pairs, key=lambda p: p["total_xor_area_um2"], default=None)
-            c[0].metric("Match the reference", f"{len(same)} of {len(ref_pairs)}")
-            if worst:
-                other = worst["b"] if worst["a"] == reference else worst["a"]
-                c[1].metric("Furthest from reference", other)
-                c[2].metric("Its XOR area", um2(worst["total_xor_area_um2"]))
-            if same:
-                st.success("Identical to the reference: " + ", ".join(
-                    (p["b"] if p["a"] == reference else p["a"]) for p in same))
-
-            grid = style_figure(difference_grid(xor_result, reference, _cell_bbox))
-            if grid is not None:
-                st.plotly_chart(grid, width="stretch", key="diffgrid")
-                st.caption(f"Each panel is one layout against **{reference}**, on shared axes and "
-                           f"to scale. Red = missing relative to the reference, green = extra. "
-                           f"A region that lights up in every panel is where all the churn is.")
-
-            hot = style_figure(change_hotspot(xor_result, _cell_bbox, reference=reference))
-            if hot is not None:
-                st.plotly_chart(hot, width="stretch", key="hotspot")
-                st.caption("Difference area accumulated over a grid of the cell, so a "
-                           "repeatedly-edited region stands out however the revisions are paired.")
-
-            with st.expander("Pairwise matrix — every combination"):
-                heat = style_figure(similarity_matrix(xor_result))
-                if heat is not None:
-                    st.plotly_chart(heat, width="stretch", key="simmatrix")
-                c = st.columns(2)
-                if xor_result["most_similar_pair"]:
-                    c[0].metric("Closest pair", " ↔ ".join(xor_result["most_similar_pair"]))
-                if xor_result["most_different_pair"]:
-                    c[1].metric("Furthest pair", " ↔ ".join(xor_result["most_different_pair"]))
-                if xor_result["identical_pairs"]:
-                    st.success("Identical: " + "; ".join(
-                        " ↔ ".join(p) for p in xor_result["identical_pairs"]))
-
-# --- per-file detail, collapsed: needed sometimes, not first ------------------
-st.divider()
 def answer_for(question: str, metadata: dict, history: list | None = None) -> str:
     """Answer one question, deterministic first and the model only as a fallback.
 
@@ -731,7 +537,20 @@ if _focus:
             if ea or eb or not oa or not ob:
                 st.error(f"Could not read the geometry: {ea or eb}")
                 return
-            xor_detail = _xor_for_chat if isinstance(_xor_for_chat, dict) else {}
+            # The XOR is computed here rather than read from the page below,
+            # which has not run yet - the workspace deliberately renders before the
+            # page body so it owns the screen. run_xor is cached, so this is the
+            # same result the comparison section will show, not a second opinion.
+            _res, _err = run_xor(
+                tuple(u.name for u in uploads),
+                tuple(u.getvalue() for u in uploads),
+                layermap, st.session_state.get("xor_tol", 0.0), conn_stack)
+            xor_detail = {}
+            if _res:
+                for _pair in _res["pairs"]:
+                    if _pair["a"] == _focus["a"] and _pair["b"] == _focus["b"]:
+                        xor_detail = _pair.get("detail") or {}
+                        break
             compare_panel(xor_detail, oa, ob, _layer_colours, _focus["a"], _focus["b"],
                           key="ws_cmp", height=760, expandable=False)
         else:
@@ -1080,6 +899,167 @@ if len(metadata_list) == 2:
     )
 
 
+
+if len(uploads) >= 2:
+    xor_result, xor_error = run_xor(
+        tuple(u.name for u in uploads), tuple(u.getvalue() for u in uploads),
+        layermap, st.session_state.get("xor_tol", 0.0), conn_stack)
+
+    if xor_error:
+        st.error(f"XOR comparison failed: {xor_error}")
+    elif xor_result:
+        names = xor_result["files"]
+        labels = [f"{p['a']} → {p['b']}" for p in xor_result["pairs"]]
+        pick = st.selectbox("Compare", labels, key="xor_pair",
+                            label_visibility="collapsed") if len(labels) > 1 else labels[0]
+        pair = xor_result["pairs"][labels.index(pick)]
+        detail = pair.get("detail")
+        _xor_for_chat = detail or {"comparable": False,
+                                   "reason": pair.get("reason", "unknown")}
+
+        # 1. The verdict. One line, before anything else.
+        head = headline(detail, _cell_area)
+        st.markdown(verdict_html(head["state"], head["headline"], head.get("detail", "")),
+                    unsafe_allow_html=True)
+
+        if detail and detail.get("comparable") and not detail["summary"]["identical"]:
+            s = detail["summary"]
+            # 2. Four numbers, not fourteen.
+            c = st.columns(4)
+            c[0].metric("Layers changed", f"{s['layers_changed']}/{s['layers_compared']}")
+            c[1].metric("Regions", s["difference_regions"])
+            c[2].metric("XOR area", um2(s["total_xor_area_um2"]),
+                        help="Total geometry present in one layout and not the other")
+            c[3].metric("Removed → Added",
+                        f"{um2(s['total_area_removed_um2'], 3)} → {um2(s['total_area_added_um2'], 3)}")
+
+            # 3. The picture. This is what a reviewer actually reads.
+            changed = sorted((x for x in detail["layers"] if not x["identical"]),
+                             key=lambda r: -r["xor"]["area_um2"])
+            # Both layouts in one interactive view, with the differing regions
+            # drawn on top. The old figure could only show the regions - you
+            # could see *that* something changed but not what it sat in, so
+            # every finding meant opening KLayout to get the context back.
+            oa, ea = process_outlines(uploads[_idx_of[pair["a"]]].getvalue(),
+                                      pair["a"], layermap, conn_stack)
+            ob, eb = process_outlines(uploads[_idx_of[pair["b"]]].getvalue(),
+                                      pair["b"], layermap, conn_stack)
+            if ea or eb or not oa or not ob:
+                st.error(f"Could not read the geometry for drawing: {ea or eb}")
+            else:
+                compare_panel(detail, oa, ob, _layer_colours,
+                              pair["a"], pair["b"], key="cmp")
+                st.markdown(hint(
+                    "<b>A</b>/<b>B</b> show one layout, <b>A+B</b> overlays them, "
+                    "<b>XOR</b> leaves only the differences, and the wipe and blink "
+                    "tools compare them in place. Red is only in the first file, "
+                    "green only in the second."), unsafe_allow_html=True)
+
+            # 4. What to look at first, largest difference first.
+            st.markdown(section("Largest differences — biggest first"),
+                        unsafe_allow_html=True)
+            top = findings(detail, _cell_area, limit=6)
+            st.dataframe(pd.DataFrame([{
+                "layer": f["layer"], "change": f["change"], "size": f["size"],
+                "area": um2(f["area_um2"], 3), "of cell": f["share_of_cell"],
+                "at (µm)": f"{f['at_um'][0]}, {f['at_um'][1]}"} for f in top]),
+                width="stretch", hide_index=True, key="findings")
+            st.markdown(
+                chips(("XOR geometry · exact", "exact"),
+                      ("layer roles · inferred from names", "inferred"),
+                      ("intent · requires netlist", "requires netlist"),
+                      ("rule compliance · requires PDK", "requires PDK")),
+                unsafe_allow_html=True)
+
+            # Everything else is available, but out of the way.
+            with st.expander(f"All {s['layers_changed']} changed layers, and settings"):
+                st.select_slider(
+                    "Edge-shift tolerance — differences at or below this are binned separately",
+                    options=[0.0, 0.005, 0.01, 0.02, 0.05], key="xor_tol",
+                    format_func=lambda v: "off" if not v else nm(v))
+                changed = [r for r in detail["layers"] if not r["identical"]]
+                st.dataframe(pd.DataFrame([{
+                    "layer": r["name"], "role": r["role"],
+                    "regions": r["xor"]["count"],
+                    "xor area": um2(r["xor"]["area_um2"], 3),
+                    "largest": um2(r["xor"]["largest_area_um2"], 3),
+                    "removed": r["removed"]["count"], "added": r["added"]["count"],
+                    "Δ area": um2(r["area_delta_um2"], 3),
+                    "edge shifts": r.get("at_or_below_tolerance_count"),
+                    "only in": ("B" if not r["present_in_a"] else
+                                "A" if not r["present_in_b"] else ""),
+                } for r in sorted(changed, key=lambda r: -r["xor"]["area_um2"])]),
+                    width="stretch", hide_index=True, key="xor_changed")
+
+                text_rows = [r for r in detail["layers"]
+                             if r.get("texts_added") or r.get("texts_removed")]
+                if text_rows:
+                    st.markdown("**Label changes** — no geometry impact, but LVS sees them")
+                    st.dataframe(pd.DataFrame([{
+                        "layer": r["name"],
+                        "added": ", ".join(r.get("texts_added") or []) or "—",
+                        "removed": ", ".join(r.get("texts_removed") or []) or "—",
+                    } for r in text_rows]), width="stretch", hide_index=True, key="xor_text")
+
+                st.caption(detail["mask_impact"]["caveat"])
+                st.markdown("**Not derivable from an XOR**")
+                for k, v in detail["not_derivable"].items():
+                    st.markdown(f"- *{k.replace('_', ' ')}* — {v}")
+
+        # Three or more layouts is a revision family, not a pair. The question
+        # becomes "which of these differs from the golden one, and where?", so the
+        # views are reference-based rather than pairwise.
+        if len(names) > 2:
+            st.divider()
+            st.markdown(section(f"All {len(names)} layouts — reference comparison"),
+                        unsafe_allow_html=True)
+            reference = st.selectbox(
+                "Reference layout — everything is compared back to this",
+                names, key="xor_reference",
+                help="A revision family is reviewed against one golden database.")
+
+            c = st.columns(3)
+            ref_pairs = [p for p in xor_result["pairs"]
+                         if reference in (p["a"], p["b"]) and p.get("comparable")]
+            same = [p for p in ref_pairs if p["identical"]]
+            worst = max(ref_pairs, key=lambda p: p["total_xor_area_um2"], default=None)
+            c[0].metric("Match the reference", f"{len(same)} of {len(ref_pairs)}")
+            if worst:
+                other = worst["b"] if worst["a"] == reference else worst["a"]
+                c[1].metric("Furthest from reference", other)
+                c[2].metric("Its XOR area", um2(worst["total_xor_area_um2"]))
+            if same:
+                st.success("Identical to the reference: " + ", ".join(
+                    (p["b"] if p["a"] == reference else p["a"]) for p in same))
+
+            grid = style_figure(difference_grid(xor_result, reference, _cell_bbox))
+            if grid is not None:
+                st.plotly_chart(grid, width="stretch", key="diffgrid")
+                st.caption(f"Each panel is one layout against **{reference}**, on shared axes and "
+                           f"to scale. Red = missing relative to the reference, green = extra. "
+                           f"A region that lights up in every panel is where all the churn is.")
+
+            hot = style_figure(change_hotspot(xor_result, _cell_bbox, reference=reference))
+            if hot is not None:
+                st.plotly_chart(hot, width="stretch", key="hotspot")
+                st.caption("Difference area accumulated over a grid of the cell, so a "
+                           "repeatedly-edited region stands out however the revisions are paired.")
+
+            with st.expander("Pairwise matrix — every combination"):
+                heat = style_figure(similarity_matrix(xor_result))
+                if heat is not None:
+                    st.plotly_chart(heat, width="stretch", key="simmatrix")
+                c = st.columns(2)
+                if xor_result["most_similar_pair"]:
+                    c[0].metric("Closest pair", " ↔ ".join(xor_result["most_similar_pair"]))
+                if xor_result["most_different_pair"]:
+                    c[1].metric("Furthest pair", " ↔ ".join(xor_result["most_different_pair"]))
+                if xor_result["identical_pairs"]:
+                    st.success("Identical: " + "; ".join(
+                        " ↔ ".join(p) for p in xor_result["identical_pairs"]))
+
+# --- per-file detail, collapsed: needed sometimes, not first ------------------
+st.divider()
 if "chat" not in st.session_state:
     st.session_state.chat = []
 
