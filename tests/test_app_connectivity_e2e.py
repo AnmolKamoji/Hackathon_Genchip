@@ -1,0 +1,218 @@
+"""End-to-end tests driving the real Streamlit app with the real sample files.
+
+These exist because every unit test can pass while the page still raises: the
+duplicate-element-ID crash and a `.lyp` being fed to the JSON stack parser were
+both only visible from here.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+import streamlit as st
+from streamlit.testing.v1 import AppTest
+
+ROOT = Path(__file__).resolve().parent.parent
+SAMPLES = ROOT / "data" / "samples"
+APP = ROOT / "app.py"
+
+
+class _Upload:
+    """Stands in for Streamlit's UploadedFile."""
+
+    def __init__(self, path: Path):
+        self.path = Path(path)
+        self.name = self.path.name
+
+    def getvalue(self) -> bytes:
+        return self.path.read_bytes()
+
+
+@pytest.fixture
+def run_app(monkeypatch):
+    """Run app.py with chosen uploads, returning the finished AppTest."""
+
+    def runner(gds: list[str], *, lyp: bool = True, stack: bool = True, json: bool = False):
+        def fake_uploader(label, *args, **kwargs):
+            # Order matters: the stack uploader's own label mentions ".lyp", so a
+            # naive ".lyp" check hands it the XML layer-properties file and it
+            # fails to parse as JSON.
+            if "connection stack" in label:
+                return _Upload(SAMPLES / "Titan_stack.json") if stack else None
+            if "GDS" in label:
+                return [_Upload(SAMPLES / g) for g in gds]
+            if "sidecar" in label:
+                return ([_Upload(SAMPLES / (g[:-4] + ".json")) for g in gds] if json else [])
+            if ".lyp" in label:
+                return _Upload(SAMPLES / "Titan_layer_properties.lyp") if lyp else None
+            return None
+
+        monkeypatch.setattr(st, "file_uploader", fake_uploader)
+        at = AppTest.from_file(str(APP), default_timeout=600).run()
+        assert not at.exception, [e.value for e in at.exception]
+        assert not at.error, [e.value for e in at.error]
+        return at
+
+    return runner
+
+
+def _metrics(at) -> dict[str, str]:
+    return {m.label: m.value for m in at.metric}
+
+
+@pytest.mark.parametrize("gds,shapes,components", [
+    ("DCAP0_1_RT_4.gds", "56", "50"),
+    ("NR2D1_1_RT_4.gds", "60", "54"),
+])
+def test_intra_layer_metrics_render(run_app, gds, shapes, components):
+    m = _metrics(run_app([gds]))
+    assert m["Conducting shapes"] == shapes
+    assert m["Physical conductors"] == components
+    assert m["Layers with abutting shapes"] == "2"
+
+
+def test_net_graph_renders_with_a_stack(run_app):
+    m = _metrics(run_app(["NR2D1_1_RT_4.gds"]))
+    assert m["Nets"] == "7"
+    assert m["Multi-layer nets"] == "5"
+    # Two PMOSInterconnect stubs no via reaches in this revision.
+    assert m["Floating nets"] == "2"
+
+
+def test_bundled_stack_builds_the_net_graph_with_only_a_gds(run_app):
+    """The realistic case: a `.gds` on its own, no sidecar and no stack upload.
+
+    The bundled technology stack fills the gap, so the net graph is available -
+    and the page states where the stack came from, since it is not PDK-verified.
+    """
+    at = run_app(["NR2D1_1_RT_4.gds"], stack=False, json=False, lyp=False)
+    assert _metrics(at)["Nets"] == "7"
+    captions = " ".join(c.value for c in at.caption)
+    assert "bundled technology stack" in captions
+    assert "not PDK-verified" in captions
+
+
+def test_bundled_layer_map_is_used_when_none_is_uploaded(run_app):
+    """The layer map is a default, not an optional extra.
+
+    Uploading only a `.gds` is the common case, and without a map it loses layer
+    names, roles, via counts and every role aggregate — so the bundled technology
+    map is applied unless the user supplies their own.
+    """
+    at = run_app(["NR2D1_1_RT_4.gds"], lyp=False, stack=True)
+    infos = " ".join(i.value for i in at.info)
+    assert "bundled by default" in infos
+    # With the map present the stack resolves, so the net graph is built.
+    assert _metrics(at)["Nets"] == "7"
+    warnings = " ".join(w.value for w in at.warning)
+    assert "needs a .lyp as well" not in warnings
+
+
+def test_uploaded_layer_map_overrides_the_bundled_one(run_app):
+    at = run_app(["NR2D1_1_RT_4.gds"], lyp=True)
+    infos = " ".join(i.value for i in at.info)
+    assert "(uploaded)" in infos
+
+
+def test_gds_only_reports_the_exact_tier_one_numbers(run_app):
+    """Tier 1 is GDS-only and exact, whatever else is or is not supplied."""
+    at = run_app(["NR2D1_1_RT_4.gds"], lyp=False, stack=False)
+    m = _metrics(at)
+    assert m["Conducting shapes"] == "60"
+    assert m["Physical conductors"] == "54"
+    assert m["Layers with abutting shapes"] == "2"
+    # Via-ness comes from the bundled layer map's via layer names.
+    assert m["Vias"] == "6"
+
+
+def test_decap_resolves_to_four_nets_with_no_complaints(run_app):
+    """DCAP0 under the corrected stack: two terminals plus two power taps."""
+    at = run_app(["DCAP0_1_RT_4.gds"])
+    assert _metrics(at)["Nets"] == "4"
+    warnings = " ".join(w.value for w in at.warning)
+    assert "single net" not in warnings
+    assert "disagrees with the layout" not in warnings
+
+
+def test_sidecar_supplies_the_stack_without_a_stack_upload(run_app):
+    """A sidecar names its vias after their endpoints, so it can stand in for the
+    uploaded stack file."""
+    at = run_app(["DCAP0_1_RT_4.gds"], stack=False, json=True)
+    assert _metrics(at)["Nets"] == "4"
+    infos = " ".join(i.value for i in at.info)
+    assert "net graph was not built" not in infos
+
+
+def test_two_files_with_sidecars_and_connectivity(run_app):
+    """The heaviest path: two uploads, fused metadata, comparison and both
+    connectivity analyses on one page."""
+    at = run_app(["DCAP0_1_RT_4.gds", "DCAP0_2_RT_4.gds"], json=True)
+    m = _metrics(at)
+    assert m["Vias"] == "10"            # fused mode supplies via semantics
+    assert m["Nets"] == "4"
+    assert m["Layers changed"] == "4/31"
+    # Duplicate element IDs previously aborted the whole page here.
+    assert len(list(at.dataframe)) >= 8
+
+
+def test_same_file_uploaded_twice_does_not_crash(run_app):
+    """Identical uploads produce identical auto-generated widget keys."""
+    at = run_app(["NR2D1_1_RT_4.gds", "NR2D1_1_RT_4.gds"])
+    assert _metrics(at)["Conducting shapes"] == "60"
+
+
+# --- multi-file XOR comparison ----------------------------------------------
+
+def test_four_files_render_the_xor_matrix(monkeypatch):
+    """Engineers review families of revisions, not just pairs."""
+    files = ["DCAP0_1_RT_4.gds", "DCAP0_2_RT_4.gds",
+             "NR2D1_1_RT_4.gds", "NR2D1_2_RT_4.gds"]
+
+    def fake_uploader(label, *args, **kwargs):
+        if "connection stack" in label:
+            return None
+        if "GDS" in label:
+            return [_Upload(SAMPLES / f) for f in files]
+        if "sidecar" in label:
+            return []
+        if ".lyp" in label:
+            return None
+        return None
+
+    monkeypatch.setattr(st, "file_uploader", fake_uploader)
+    at = AppTest.from_file(str(APP), default_timeout=900).run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert not at.error, [e.value for e in at.error]
+
+    m = _metrics(at)
+    # The matrix picks the two revisions of one cell as closest.
+    assert "DCAP0_1_RT_4.gds" in m["Closest pair"]
+    assert "DCAP0_2_RT_4.gds" in m["Closest pair"]
+    # And the first pair's XOR detail, established independently.
+    assert m["Layers changed"] == "4/31"
+    assert m["Regions"] == "19"
+    assert m["XOR area"] == "0.005308 µm²"
+    # The verdict leads, before any table. It is a themed element rather than a
+    # stock alert box, so it renders as markdown.
+    verdicts = [m.value for m in at.markdown if 'class="verdict"' in m.value]
+    assert verdicts, "the verdict banner must be on the page"
+    assert "4 of 31 layers differ" in " ".join(verdicts)
+
+
+def test_identical_uploads_report_no_differences(monkeypatch):
+    def fake_uploader(label, *args, **kwargs):
+        if "connection stack" in label:
+            return None
+        if "GDS" in label:
+            return [_Upload(SAMPLES / "DCAP0_1_RT_4.gds")] * 2
+        if "sidecar" in label:
+            return []
+        if ".lyp" in label:
+            return None
+        return None
+
+    monkeypatch.setattr(st, "file_uploader", fake_uploader)
+    at = AppTest.from_file(str(APP), default_timeout=900).run()
+    assert not at.exception, [e.value for e in at.exception]
+    verdicts = " ".join(m.value for m in at.markdown if 'class="verdict"' in m.value)
+    assert "Identical — no geometric difference" in verdicts

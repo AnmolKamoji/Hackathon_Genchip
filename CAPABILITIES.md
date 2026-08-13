@@ -1,0 +1,345 @@
+# What this platform can and cannot determine
+
+Every feature is labelled with the information it requires. The labels are:
+
+| Label | Meaning |
+|---|---|
+| **GDS-only** | Derivable from the `.gds` alone. Exact. |
+| **LYP-only** | Derivable from the `.lyp` alone (naming and display, no geometry). |
+| **GDS + LYP** | Needs both: geometry from the GDS, layer identity from the LYP. |
+| **GDS + sidecar** | Needs the semantic JSON sidecar, which names layers by function. |
+| **Requires PDK/DRC rules** | Needs a rule deck, process stack or technology file. |
+| **Requires netlist/design intent** | Needs a netlist, schematic, LVS reference or spec. |
+| **Not possible** | Not derivable from any combination of the above inputs. |
+
+Two rules govern every output:
+
+1. **A measurement is never reported as a rule violation.** "Observed M1 minimum
+   width is 0.09 µm" is a measurement. "M1 minimum width DRC violation" requires a
+   rule deck, and no rule deck is supplied.
+2. **A physical fact is never reported as electrical intent.** "M0 and M1 are
+   physically joined through VIA0" is derivable given a process stack. "M0 and M1
+   are *supposed* to be joined" requires a netlist.
+
+---
+
+## The single most important limitation: GDSII has no Z axis
+
+A GDS file records shapes on numbered layers. It does **not** record which layer
+sits above which, nor which via layer bridges which two levels. A `.lyp` records
+colours, fill patterns and names — not elevations. So the **vertical connection
+stack is absent from both inputs**, and it is the gate on every net-level result.
+
+This was established by measurement, not assumption. Three candidate ways to infer
+the stack from geometry were tried on the sample technology, and each fails:
+
+| Discriminator | Why it fails |
+|---|---|
+| Plan-view overlap (`interacting`) | In a dense standard cell nearly every connector layer overlaps nearly every conductor layer, because they are stacked. Treating overlap as connection collapsed a whole cell into one false net spanning 21 layers. |
+| Full enclosure (`inside`) | A diffusion contact is wider than the fin it straddles, so nothing encloses it. Meanwhile a cell-spanning backside power rail *does* enclose vias it has no connection to. |
+| Ubiquity (demote layers that are candidates for every connector) | The genuine local-interconnect layer (`M0`) is also a candidate for every connector, so demoting ubiquitous layers demotes the right answer. |
+
+The concrete case: this technology uses backside power delivery (the `.lyp`
+contains `BSPDN-PMOS-VIA`), so `BM0` underlies the entire cell. Geometry alone
+therefore reports `N-VIAT` as joining `M0` and `BM0` with maximum confidence, and
+that is wrong. Knowing `BM0` is on the far side of the wafer is technology
+knowledge.
+
+**Consequence:** the net graph is only computed from an explicitly supplied
+connection stack (`data/samples/Titan_stack.json` shows the format), or from an
+inferred stack that the caller explicitly accepts — in which case every result is
+labelled provisional. It is never applied silently.
+
+### One good way out: the sidecar names the stack
+
+When a semantic JSON sidecar is present it names each via layer after its
+endpoints — `VIA_M0_M1`, `VIA_M0_PMOSGate`, `VIA_Inteconnect_BSPowerRail`. That
+*states* the stack instead of leaving it to be guessed from geometry, so the net
+graph becomes available from **GDS + sidecar** with no PDK file. It is still a
+naming convention rather than verified technology data, and is labelled as such.
+
+This corrected the `.lyp`-only reading in two places, and both mattered:
+
+1. The layers a `.lyp` calls `NDIFFCON`/`PDIFFCON` are named
+   `NMOSInterconnect`/`PMOSInterconnect` in the sidecar. They are local
+   interconnect **conductors**, not contacts. The `"CON"` name heuristic made them
+   contacts bridging diffusion to `M0`, which shorted an entire cell into one net.
+   A stack file can now correct any role via its `roles` block.
+2. `N-VIAT`/`P-VIAT` land on those interconnect layers, not on the diffusion
+   (nanosheet) layers directly.
+
+With the corrected stack, results are physically sensible and the two independent
+stack sources — the hand-transcribed file and the sidecar-derived one — produce
+**identical net graphs on all four sample files**:
+
+| File | Nets | Structure |
+|---|---|---|
+| `DCAP0_1`, `DCAP0_2` | 4 | Two mirrored capacitor terminals (gate + interconnect + M0 + M1), plus two backside power taps. Exactly a decap. |
+| `NR2D1_1` | 7 | Two gate inputs, one interconnect net, two power taps, and two `PMOSInterconnect` stubs no via reaches. |
+| `NR2D1_2` | 6 | The same, but the added `VIA_M0_PMOSInterconnect` connects one of those stubs — a real, reportable difference between revisions. |
+
+---
+
+## 1. File integrity and structure
+
+| Feature | Availability | Status |
+|---|---|---|
+| Readable GDSII, record structure, `UNITS`/dbu | **GDS-only** | Done |
+| Top cell(s), multiple/ambiguous top cells | **GDS-only** | Done — multiple tops are reported, not silently truncated |
+| Cell count, hierarchy depth, instance placements | **GDS-only** | Done — depth, levels per cell, placements vs records |
+| Empty cells, orphan cells, recursion | **GDS-only** | Done — `analyzer/hierarchy.py`; orphans are cells unreachable from the analysed top cell |
+| Layer/datatype inventory, as-stored vs flattened counts | **GDS-only** | Done |
+| Geometry fingerprint for change detection | **GDS-only** | Done — SHA over merged polygons, cross-checked against KLayout XOR |
+
+## 2. Layer mapping and identity
+
+| Feature | Availability | Status |
+|---|---|---|
+| Layer number/datatype → technology name | **LYP-only** | Done — 49 entries parsed |
+| Display properties (colour, fill, visibility) | **LYP-only** | Parsed; not surfaced in the UI |
+| Role from naming (drawing / pin / label / duplicate) | **LYP-only** | Done |
+| Role from naming (metal / via / contact / poly / diffusion) | **LYP-only** | Done — a name heuristic, and labelled as one |
+| Layers present in GDS but absent from LYP (and vice versa) | **GDS + LYP** | Done |
+| **True layer purpose and process meaning** | **Requires PDK/DRC rules** | Not possible from a `.lyp`; names are a convention, not a contract |
+
+## 3. Geometry measurement
+
+| Feature | Availability | Status |
+|---|---|---|
+| Shape counts by type (box / polygon / path / text) | **GDS-only** | Done |
+| Merged area per layer, union vs sum of parts | **GDS-only** | Done — verified against independent KLayout runs |
+| Bounding boxes, width/height | **GDS-only** | Done |
+| Per-layer-name totals across datatypes | **GDS + LYP** | Done — union within a layer number, summed across layer numbers |
+| Observed minimum width / spacing | **GDS-only** | Done — KLayout width/space checks, cross-checked independently |
+| Perimeter, as drawn and merged | **GDS-only** | Done — the two differ where shapes abut, and both are reported |
+| Vertex counts, non-rectangular shape counts | **GDS-only** | Done |
+| **Whether a measured width/spacing passes** | **Requires PDK/DRC rules** | Never claimed |
+
+## 4. Metal layer analysis
+
+| Feature | Availability | Status |
+|---|---|---|
+| Metal layer identification | **GDS + LYP** | Done |
+| Per-metal area, shape count, density | **GDS + LYP** | Done |
+| Observed minimum width, observed minimum spacing | **GDS-only** | Done — per layer and per role, labelled `observed_` |
+| Wire direction / preferred routing direction | **GDS-only** | Partial — shape extents and array pitch are measured; no preferred-direction inference |
+| **Width/spacing rule compliance** | **Requires PDK/DRC rules** | Never claimed |
+
+## 5. Via analysis
+
+| Feature | Availability | Status |
+|---|---|---|
+| Via layer identification | **LYP-only** | Done |
+| Via count per layer, sizes, positions | **GDS + LYP** | Done |
+| Which conductor layers each via overlaps / is enclosed by | **GDS + LYP** | Done — reported as *overlap*, never as *connection* |
+| Vias overlapping no conductor at all | **GDS + LYP** | Done — stack-independent, so safe to report |
+| Which two levels a via actually bridges | **Requires PDK/DRC rules** | Inferred with a confidence and alternatives; never asserted |
+| **Via enclosure/overlap rule compliance** | **Requires PDK/DRC rules** | Never claimed |
+
+## 6. Contact analysis
+
+| Feature | Availability | Status |
+|---|---|---|
+| Contact layer identification, counts, sizes | **GDS + LYP** | Done |
+| Contact-to-diffusion / contact-to-metal overlap | **GDS + LYP** | Done, as measured overlap |
+| **Contact rule compliance** | **Requires PDK/DRC rules** | Never claimed |
+
+## 7. Physical connectivity — implemented in three tiers
+
+| Feature | Availability | Status |
+|---|---|---|
+| **Tier 1** — intra-layer connected components (shapes that touch are one conductor) | **GDS-only** | Done, exact — cross-checked against from-scratch union-find on 106 (layer, shapes, components) triples, 0 mismatches |
+| Per-layer fragmentation (shapes vs conductors) | **GDS-only** | Done |
+| **Tier 2** — via/contact landing measurement (interaction + enclosure ratios) | **GDS + LYP** | Done, exact — cross-checked by an independent formulation on 122 pairs, 0 mismatches |
+| Conductor layers that abut edge-to-edge (one level under two names, e.g. `NPOLY`/`PPOLY`) | **GDS + LYP** | Done, measured |
+| **Tier 3** — net graph, connected components across layers | **Requires PDK/DRC rules** (the process stack), **or GDS + sidecar** | Done, from a supplied stack, a sidecar-derived stack, or an explicitly accepted inference |
+| Connection stack from sidecar via layer names | **GDS + sidecar** | Done — cross-validated against the hand-written stack, identical nets on all 4 files |
+| Layer role correction (`roles` block in the stack file) | **Requires PDK/DRC rules** | Done — the `"CON"` heuristic is wrong on this technology and must be correctable |
+| Floating conductors (nets using no via or contact) | **Requires PDK/DRC rules** or **GDS + sidecar** | Done, under the stack in use |
+| Stack plausibility check (whole cell collapsing to one net) | **GDS + LYP** | Done — flags an over-connecting stack rather than reporting "1 net" |
+| Supplied stack vs measured geometry cross-check | **GDS + LYP** | Done |
+| **Physical shorts** | **Requires netlist/design intent** | Always refused — a short is defined against an intended netlist |
+| **Physical opens** | **Requires netlist/design intent** | Always refused; vias overlapping no conductor are offered as the observable proxy |
+| **Electrical intent of any net** | **Requires netlist/design intent** | Always refused |
+| Net names, pins, ports | **Requires netlist/design intent** | Not possible from GDS + LYP (text labels give hints only) |
+
+## 8. Density and hotspots
+
+| Feature | Availability | Status |
+|---|---|---|
+| Per-layer density over the cell bounding box | **GDS-only** | Done |
+| Windowed density map / hotspot location | **GDS-only** | Not implemented — refused by name; whole-cell density per layer is exact |
+| **Density rule compliance (min/max window density)** | **Requires PDK/DRC rules** | Never claimed |
+
+## 9–12. Anomalies, patterns, complexity, utilization
+
+| Feature | Availability | Status |
+|---|---|---|
+| Statistical outliers in size, count, density | **GDS-only** | Not implemented — refused by name |
+| Array pitch / regular arrangement | **GDS-only** | Done — measured pitch per layer (row, column, grid or irregular) |
+| Repeated patterns in raw geometry | **GDS-only** | Not implemented — refused by name |
+| Cell complexity inputs (vertices, depth, layer count) | **GDS-only** | Done; no single complexity *score* is produced |
+| Layer utilization ranking | **GDS + LYP** | Done — share of geometry and coverage per layer |
+| **Whether an anomaly is a defect** | **Requires netlist/design intent** | Never claimed |
+
+## 13–14. Instance placement and spatial analysis
+
+| Feature | Availability | Status |
+|---|---|---|
+| Instance placements, transforms, array repetitions | **GDS-only** | Done — placements counted separately from records |
+| Layer abutment / overlap measurement | **GDS + LYP** | Done — measured adjacency between conductor layers |
+| Spatial distribution statistics | **GDS-only** | Not implemented — refused by name |
+
+## 15–17. Via distribution, metal fragmentation, health scoring
+
+| Feature | Availability | Status |
+|---|---|---|
+| Via count, size, spacing, pitch per layer | **GDS + LYP** | Done |
+| Via spatial distribution statistics | **GDS + LYP** | Not implemented |
+| Metal fragmentation (shapes per physical conductor) | **GDS-only** | Done — tier 1, exact |
+| Composite "health score" | — | **Deliberately not implemented.** A single score implies a pass/fail threshold, which requires a rule deck. Individual measurements are reported instead. |
+
+## 18–19. Risk scoring and AI layer
+
+| Feature | Availability | Status |
+|---|---|---|
+| Natural-language explanation of measured metadata | **GDS + LYP** | Done — the model may only restate figures the analyzer computed |
+| Anomaly prioritisation and root-cause hypotheses | **GDS + LYP** | Partial — hypotheses are labelled as such |
+| **Risk score presented as a verdict** | **Requires PDK/DRC rules** | Never produced |
+
+## 20–23. Querying, reporting, boundaries
+
+| Feature | Availability | Status |
+|---|---|---|
+| Natural-language Q&A over the metadata | **GDS + LYP** | Done — deterministic answers first, model only for phrasing |
+| Deterministic refusal of DRC/LVS/short/open questions | — | Done, and tested |
+| Two-file comparison with geometry-level change detection | **GDS-only** | Done — verified against KLayout XOR |
+| Report generation | **GDS + LYP** | Done |
+| Explicit statement of what is not derivable | — | Done — carried in the metadata itself so the model sees it |
+
+---
+
+## Verification standard used
+
+Every numeric claim in this document was checked against a **separately written**
+computation, never against the analyzer's own output:
+
+- Tier-1 components vs from-scratch union-find over pairwise shape interaction:
+  **106 (layer, shapes, components) triples, 0 mismatches**.
+- Tier-2 landings vs an independent formulation (set difference for enclosure,
+  region growing for interaction): **122 (connector, conductor) pairs,
+  0 mismatches**.
+- The two stack sources against each other — a stack transcribed by hand against
+  the `.lyp` names, and one parsed from the sidecar's via names: **identical net
+  graphs on all 4 sample files**.
+- Layer areas vs independent KLayout runs: **48 groups, 0 mismatches**.
+- Geometry change detection vs KLayout XOR: **exact agreement**.
+- Deterministic answers vs the contextual fact-checker, across 24 configurations
+  (4 files × 2 metadata modes × 3 stack sources): **892 claims, 0 unsupported**,
+  with **24 negative-control self-tests** proving the checker catches fabricated
+  figures rather than passing everything.
+- All 24 configurations validated against the metadata and connectivity schema
+  contracts.
+- **281 automated tests**, including 10 that drive the real Streamlit app with the
+  real sample files, and `verify_setup.py`'s 15 end-to-end checks.
+- Live model answers spot-checked against the fact-checker: the boundaries held
+  under leading questions ("the vias overlap both M0 and M1, so VIA0 connects
+  them, correct?" was rejected), and two wording defects the live test exposed —
+  a sidecar-derived stack being described as a geometric guess, and net identities
+  missing from the digest — were fixed.
+
+---
+
+# The 59-topic checklist, answered
+
+Run empirically: each topic was posed as a natural question against all four sample
+files in both `gds` and `fused` mode (8 configurations), and every numeric claim in
+every answer was audited by `tools/claimcheck.py`.
+
+**Result: 384 answers produced locally, 88 deferred to the model, 656 numeric claims
+audited, 0 unsupported.**
+
+"Local" means a deterministic answer computed by the analyzer. "Model" means the
+figures are in the metadata and Claude phrases them — it cannot invent a number,
+because the accuracy checks apply to its output too.
+
+| # | Topic | Availability | Status |
+|---|---|---|---|
+| 1 | GDS File Integrity & Basic Validation | GDS-only | Model, from warnings + consistency |
+| 2 | GDS Format & Version | GDS-only | Model, from `technology.raw_version` |
+| 3 | Database Unit & User Unit | GDS-only | Model, from `source.dbu_um` |
+| 4 | Top-Level Cell | GDS-only | **Local** |
+| 5 | Cell & Hierarchy | GDS-only | **Local** |
+| 6 | Cell Reference Validation | GDS-only | **Local** |
+| 7 | Recursive Hierarchy Detection | GDS-only | **Local** |
+| 8 | Empty & Orphan Cell Detection | GDS-only | **Local** |
+| 9 | Cell Instance Analysis | GDS-only | **Local** — placements vs records |
+| 10 | Hierarchy Depth | GDS-only | **Local** |
+| 11 | Layer Identification & Mapping | GDS + LYP | **Local** |
+| 12 | GDS–LYP Layer Consistency | GDS + LYP | Model, from the `consistency` block |
+| 13 | Layer Usage | GDS + LYP | **Local** |
+| 14 | Layer Statistics | GDS + LYP | Model, from the per-layer rows |
+| 15 | Geometry Extraction | GDS-only | Model, from the per-layer rows |
+| 16 | Polygon Analysis | GDS-only | **Local** — discloses datatype duplication |
+| 17 | Path Analysis | GDS-only | **Local** — widths, or "no paths present" |
+| 18 | Bounding Box | GDS-only | **Local** |
+| 19 | Area & Perimeter | GDS-only | **Local** — as-drawn *and* merged perimeter |
+| 20 | Vertex & Polygon Complexity | GDS-only | **Local** |
+| 21 | Metal Layer Analysis | GDS + LYP | Model, from role aggregates |
+| 22 | Metal Width | GDS-only | **Local** — observed, never a verdict |
+| 23 | Metal Spacing | GDS-only | **Local** — observed, never a verdict |
+| 24 | Metal Area | GDS + LYP | **Local** — summed over metal layers |
+| 25 | Metal Density | GDS-only | **Local** |
+| 26 | Metal Overlap & Intersection | GDS + LYP | **Local** — measured overlap |
+| 27 | Floating Metal Detection | needs a stack | **Local** — under the stack in use |
+| 28 | Via Layer Analysis | LYP | Model, from role aggregates |
+| 29 | Via Size | GDS + LYP | **Local** |
+| 30 | Via Spacing | GDS + LYP | **Local** |
+| 31 | Via Area | GDS + LYP | **Local** |
+| 32 | Via Array Analysis | GDS + LYP | **Local** — measured pitch |
+| 33 | Via-to-Metal Connectivity | GDS + LYP | **Local** — overlap, not connection |
+| 34 | Via Enclosure | GDS + LYP | **Local** |
+| 35 | Contact Analysis | GDS + LYP | Model, from the landing measurements |
+| 36 | Contact-to-Metal Connectivity | GDS + LYP | **Local** |
+| 37 | Physical Connectivity | tiered | **Local** |
+| 38 | Connected Component Analysis | GDS-only | **Local** — exact |
+| 39 | **Physical Open Detection** | **needs netlist** | **Refused**, with the proxy offered |
+| 40 | **Physical Short Detection** | **needs netlist** | **Refused**, with the reason |
+| 41 | Disconnected Geometry | GDS-only | **Local** |
+| 42 | Floating Geometry | needs a stack | **Local** |
+| 43 | Layer-to-Layer Interaction | GDS + LYP | **Local** — measured adjacency |
+| 44 | Connectivity Graph | needs a stack | **Local** — nodes, edges, nets |
+| 45 | Density & Hotspot | GDS-only (whole-cell) | **Local** for density; windowed map **not implemented** |
+| 46 | Geometry Anomaly Detection | GDS-only | **Not implemented** — refused by name |
+| 47 | Layout Pattern Analysis | GDS-only | **Not implemented** — refused by name |
+| 48 | Repeated Structure Analysis | GDS-only | **Not implemented** for raw geometry; array *pitch* is measured (#32) |
+| 49 | Symmetry Analysis | GDS-only | **Not implemented** — refused by name |
+| 50 | Cell Complexity | GDS-only | Model, from hierarchy + vertex counts |
+| 51 | Layout Complexity | GDS-only | Model, from the same |
+| 52 | Layer Utilization | GDS + LYP | **Local** |
+| 53 | Instance Placement | GDS-only | **Local** |
+| 54 | Layout Spatial Analysis | GDS-only | **Not implemented** — refused by name |
+| 55 | Geometric Outlier Detection | GDS-only | **Not implemented** — refused by name |
+| 56 | Via Distribution | GDS + LYP | Partial — pitch and spacing measured; no distribution statistics |
+| 57 | Metal Fragmentation | GDS-only | **Local** — exact |
+| 58 | Layout Health Scoring | — | **Deliberately not produced** |
+| 59 | Physical Layout Risk Scoring | — | **Deliberately not produced** |
+
+## Where this disagrees with the premise
+
+Two topics on the list are **not** achievable from GDS + LYP, and the tool refuses
+them rather than guessing:
+
+* **#39 Physical Open** and **#40 Physical Short.** A short means two nets that
+  should be separate are joined; an open means a net that should be continuous is
+  broken. Both are defined against an *intended* netlist, and no netlist is
+  supplied. What is reported instead is the observable proxy — a via or contact
+  overlapping no conductor at all — which holds whatever the intent turns out to be.
+
+Six more are honest gaps: **#46, #47, #49, #54, #55** are not implemented (the
+geometry is available, so they are missing features, not missing inputs), and
+**#58, #59** are refused on principle, since a single score implies a pass/fail
+threshold and thresholds come from a rule deck.
+
+Every one of those eight answers names what is missing and states plainly that
+silence is not evidence of absence.

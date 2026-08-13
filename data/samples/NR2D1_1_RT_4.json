@@ -1,0 +1,2555 @@
+{
+  "version": 600,
+  "timestamp": [
+    2026,
+    8,
+    11,
+    15,
+    41,
+    37,
+    2026,
+    8,
+    11,
+    15,
+    41,
+    37
+  ],
+  "name": "LIB",
+  "units": [
+    5e-05,
+    5e-11
+  ],
+  "structures": [
+    {
+      "timestamp": [
+        2026,
+        8,
+        11,
+        15,
+        41,
+        37,
+        2026,
+        8,
+        11,
+        15,
+        41,
+        37
+      ],
+      "name": "NR2D1",
+      "elements": [
+        {
+          "id": "polygon_234",
+          "element": "boundary",
+          "datatype": 0,
+          "xy": [
+            [
+              150,
+              440
+            ],
+            [
+              150,
+              740
+            ],
+            [
+              2550,
+              740
+            ],
+            [
+              2550,
+              440
+            ],
+            [
+              150,
+              440
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [],
+          "isVia": false,
+          "layer_name": "NmosNanoSheet",
+          "topPolygon": false,
+          "layerMap": [],
+          "textPolygons": [],
+          "layer": 100
+        },
+        {
+          "id": "polygon_235",
+          "element": "boundary",
+          "datatype": 0,
+          "xy": [
+            [
+              150,
+              1560
+            ],
+            [
+              150,
+              1860
+            ],
+            [
+              2550,
+              1860
+            ],
+            [
+              2550,
+              1560
+            ],
+            [
+              150,
+              1560
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [],
+          "isVia": false,
+          "layer_name": "PmosNanoSheet",
+          "topPolygon": false,
+          "layerMap": [],
+          "textPolygons": [],
+          "layer": 101
+        },
+        {
+          "id": "polygon_219",
+          "element": "boundary",
+          "datatype": 0,
+          "xy": [
+            [
+              750,
+              200
+            ],
+            [
+              750,
+              1150
+            ],
+            [
+              1050,
+              1150
+            ],
+            [
+              1050,
+              200
+            ],
+            [
+              750,
+              200
+            ]
+          ],
+          "planarConnectedPolygon": "polygon_221",
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [],
+          "isVia": false,
+          "layer_name": "NMOSGate",
+          "topPolygon": false,
+          "layerMap": [
+            "polygon_221"
+          ],
+          "textPolygons": [],
+          "layer": 102
+        },
+        {
+          "id": "polygon_220",
+          "element": "boundary",
+          "datatype": 0,
+          "xy": [
+            [
+              1650,
+              200
+            ],
+            [
+              1650,
+              1150
+            ],
+            [
+              1950,
+              1150
+            ],
+            [
+              1950,
+              200
+            ],
+            [
+              1650,
+              200
+            ]
+          ],
+          "planarConnectedPolygon": "polygon_222",
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [],
+          "isVia": false,
+          "layer_name": "NMOSGate",
+          "topPolygon": false,
+          "layerMap": [
+            "polygon_222"
+          ],
+          "textPolygons": [],
+          "layer": 102
+        },
+        {
+          "id": "polygon_221",
+          "element": "boundary",
+          "datatype": 0,
+          "xy": [
+            [
+              750,
+              1150
+            ],
+            [
+              750,
+              2100
+            ],
+            [
+              1050,
+              2100
+            ],
+            [
+              1050,
+              1150
+            ],
+            [
+              750,
+              1150
+            ]
+          ],
+          "planarConnectedPolygon": "polygon_219",
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [
+            "polygon_225"
+          ],
+          "isVia": false,
+          "layer_name": "PMOSGate",
+          "topPolygon": false,
+          "layerMap": [
+            "polygon_225",
+            "polygon_227",
+            "polygon_219"
+          ],
+          "textPolygons": [],
+          "layer": 103
+        },
+        {
+          "id": "polygon_222",
+          "element": "boundary",
+          "datatype": 0,
+          "xy": [
+            [
+              1650,
+              1150
+            ],
+            [
+              1650,
+              2100
+            ],
+            [
+              1950,
+              2100
+            ],
+            [
+              1950,
+              1150
+            ],
+            [
+              1650,
+              1150
+            ]
+          ],
+          "planarConnectedPolygon": "polygon_220",
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [
+            "polygon_226"
+          ],
+          "isVia": false,
+          "layer_name": "PMOSGate",
+          "topPolygon": false,
+          "layerMap": [
+            "polygon_226",
+            "polygon_228",
+            "polygon_220"
+          ],
+          "textPolygons": [],
+          "layer": 103
+        },
+        {
+          "id": "polygon_241",
+          "element": "boundary",
+          "datatype": 0,
+          "xy": [
+            [
+              -150,
+              0
+            ],
+            [
+              -150,
+              2300
+            ],
+            [
+              150,
+              2300
+            ],
+            [
+              150,
+              0
+            ],
+            [
+              -150,
+              0
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [],
+          "isVia": false,
+          "layer_name": "Diffusion_Break",
+          "topPolygon": false,
+          "layerMap": [],
+          "textPolygons": [],
+          "layer": 121
+        },
+        {
+          "id": "polygon_242",
+          "element": "boundary",
+          "datatype": 0,
+          "xy": [
+            [
+              2550,
+              0
+            ],
+            [
+              2550,
+              2300
+            ],
+            [
+              2850,
+              2300
+            ],
+            [
+              2850,
+              0
+            ],
+            [
+              2550,
+              0
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [],
+          "isVia": false,
+          "layer_name": "Diffusion_Break",
+          "topPolygon": false,
+          "layerMap": [],
+          "textPolygons": [],
+          "layer": 121
+        },
+        {
+          "id": "polygon_213",
+          "element": "boundary",
+          "datatype": 0,
+          "xy": [
+            [
+              250,
+              240
+            ],
+            [
+              250,
+              1150
+            ],
+            [
+              650,
+              1150
+            ],
+            [
+              650,
+              240
+            ],
+            [
+              250,
+              240
+            ]
+          ],
+          "planarConnectedPolygon": "polygon_218",
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [
+            "polygon_230"
+          ],
+          "isVia": false,
+          "layer_name": "NMOSInterconnect",
+          "topPolygon": false,
+          "layerMap": [
+            "polygon_230",
+            "polygon_229",
+            "polygon_218"
+          ],
+          "textPolygons": [],
+          "layer": 104
+        },
+        {
+          "id": "polygon_214",
+          "element": "boundary",
+          "datatype": 0,
+          "xy": [
+            [
+              1150,
+              240
+            ],
+            [
+              1550,
+              240
+            ],
+            [
+              1550,
+              940
+            ],
+            [
+              1150,
+              940
+            ],
+            [
+              1150,
+              240
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [
+            "polygon_224"
+          ],
+          "isVia": false,
+          "layer_name": "NMOSInterconnect",
+          "topPolygon": false,
+          "layerMap": [
+            "polygon_224",
+            "polygon_233"
+          ],
+          "textPolygons": [],
+          "layer": 104
+        },
+        {
+          "id": "polygon_215",
+          "element": "boundary",
+          "datatype": 0,
+          "xy": [
+            [
+              2050,
+              240
+            ],
+            [
+              2450,
+              240
+            ],
+            [
+              2450,
+              940
+            ],
+            [
+              2050,
+              940
+            ],
+            [
+              2050,
+              240
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [
+            "polygon_231"
+          ],
+          "isVia": false,
+          "layer_name": "NMOSInterconnect",
+          "topPolygon": false,
+          "layerMap": [
+            "polygon_231",
+            "polygon_229"
+          ],
+          "textPolygons": [],
+          "layer": 104
+        },
+        {
+          "id": "polygon_218",
+          "element": "boundary",
+          "datatype": 0,
+          "xy": [
+            [
+              250,
+              1150
+            ],
+            [
+              250,
+              2060
+            ],
+            [
+              650,
+              2060
+            ],
+            [
+              650,
+              1150
+            ],
+            [
+              250,
+              1150
+            ]
+          ],
+          "planarConnectedPolygon": "polygon_213",
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [],
+          "isVia": false,
+          "layer_name": "PMOSInterconnect",
+          "topPolygon": false,
+          "layerMap": [
+            "polygon_213"
+          ],
+          "textPolygons": [],
+          "layer": 105
+        },
+        {
+          "id": "polygon_216",
+          "element": "boundary",
+          "datatype": 0,
+          "xy": [
+            [
+              1150,
+              1360
+            ],
+            [
+              1550,
+              1360
+            ],
+            [
+              1550,
+              2060
+            ],
+            [
+              1150,
+              2060
+            ],
+            [
+              1150,
+              1360
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [],
+          "isVia": false,
+          "layer_name": "PMOSInterconnect",
+          "topPolygon": false,
+          "layerMap": [],
+          "textPolygons": [],
+          "layer": 105
+        },
+        {
+          "id": "polygon_217",
+          "element": "boundary",
+          "datatype": 0,
+          "xy": [
+            [
+              2050,
+              1360
+            ],
+            [
+              2450,
+              1360
+            ],
+            [
+              2450,
+              2060
+            ],
+            [
+              2050,
+              2060
+            ],
+            [
+              2050,
+              1360
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [
+            "polygon_223"
+          ],
+          "isVia": false,
+          "layer_name": "PMOSInterconnect",
+          "topPolygon": false,
+          "layerMap": [
+            "polygon_223",
+            "polygon_232"
+          ],
+          "textPolygons": [],
+          "layer": 105
+        },
+        {
+          "id": "polygon_224",
+          "element": "boundary",
+          "datatype": 0,
+          "xy": [
+            [
+              1150,
+              340
+            ],
+            [
+              1150,
+              840
+            ],
+            [
+              1550,
+              840
+            ],
+            [
+              1550,
+              340
+            ],
+            [
+              1150,
+              340
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [
+            "polygon_214",
+            "polygon_233"
+          ],
+          "isVia": true,
+          "layer_name": "VIA_Inteconnect_BSPowerRail",
+          "topPolygon": false,
+          "layerMap": [
+            "polygon_214",
+            "polygon_233"
+          ],
+          "textPolygons": [],
+          "layer": 111
+        },
+        {
+          "id": "polygon_223",
+          "element": "boundary",
+          "datatype": 0,
+          "xy": [
+            [
+              2050,
+              1460
+            ],
+            [
+              2050,
+              1960
+            ],
+            [
+              2450,
+              1960
+            ],
+            [
+              2450,
+              1460
+            ],
+            [
+              2050,
+              1460
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [
+            "polygon_217",
+            "polygon_232"
+          ],
+          "isVia": true,
+          "layer_name": "VIA_Inteconnect_BSPowerRail",
+          "topPolygon": false,
+          "layerMap": [
+            "polygon_217",
+            "polygon_232"
+          ],
+          "textPolygons": [],
+          "layer": 111
+        },
+        {
+          "id": "polygon_230",
+          "element": "boundary",
+          "datatype": 0,
+          "xy": [
+            [
+              250,
+              720
+            ],
+            [
+              250,
+              960
+            ],
+            [
+              650,
+              960
+            ],
+            [
+              650,
+              720
+            ],
+            [
+              250,
+              720
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [
+            "polygon_213",
+            "polygon_229"
+          ],
+          "isVia": true,
+          "layer_name": "VIA_M0_NMOSInterconnect",
+          "topPolygon": false,
+          "layerMap": [
+            "polygon_213",
+            "polygon_229"
+          ],
+          "textPolygons": [],
+          "layer": 109
+        },
+        {
+          "id": "polygon_231",
+          "element": "boundary",
+          "datatype": 0,
+          "xy": [
+            [
+              2050,
+              720
+            ],
+            [
+              2050,
+              960
+            ],
+            [
+              2450,
+              960
+            ],
+            [
+              2450,
+              720
+            ],
+            [
+              2050,
+              720
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [
+            "polygon_229",
+            "polygon_215"
+          ],
+          "isVia": true,
+          "layer_name": "VIA_M0_NMOSInterconnect",
+          "topPolygon": false,
+          "layerMap": [
+            "polygon_229",
+            "polygon_215"
+          ],
+          "textPolygons": [],
+          "layer": 109
+        },
+        {
+          "id": "polygon_225",
+          "element": "boundary",
+          "datatype": 0,
+          "xy": [
+            [
+              750,
+              1760
+            ],
+            [
+              750,
+              2000
+            ],
+            [
+              1050,
+              2000
+            ],
+            [
+              1050,
+              1760
+            ],
+            [
+              750,
+              1760
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [
+            "polygon_221",
+            "polygon_227"
+          ],
+          "isVia": true,
+          "layer_name": "VIA_M0_PMOSGate",
+          "topPolygon": false,
+          "layerMap": [
+            "polygon_221",
+            "polygon_227"
+          ],
+          "textPolygons": [],
+          "layer": 106
+        },
+        {
+          "id": "polygon_226",
+          "element": "boundary",
+          "datatype": 0,
+          "xy": [
+            [
+              1650,
+              1760
+            ],
+            [
+              1650,
+              2000
+            ],
+            [
+              1950,
+              2000
+            ],
+            [
+              1950,
+              1760
+            ],
+            [
+              1650,
+              1760
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [
+            "polygon_222",
+            "polygon_228"
+          ],
+          "isVia": true,
+          "layer_name": "VIA_M0_PMOSGate",
+          "topPolygon": false,
+          "layerMap": [
+            "polygon_222",
+            "polygon_228"
+          ],
+          "textPolygons": [],
+          "layer": 106
+        },
+        {
+          "id": "polygon_233",
+          "element": "boundary",
+          "datatype": 0,
+          "xy": [
+            [
+              0,
+              -850
+            ],
+            [
+              0,
+              850
+            ],
+            [
+              2700,
+              850
+            ],
+            [
+              2700,
+              -850
+            ],
+            [
+              0,
+              -850
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [
+            "polygon_224"
+          ],
+          "isVia": false,
+          "layer_name": "BSPowerRail",
+          "topPolygon": false,
+          "layerMap": [
+            "polygon_224",
+            "polygon_214",
+            "polygon_224"
+          ],
+          "textPolygons": [
+            "text_28"
+          ],
+          "layer": 300
+        },
+        {
+          "id": "polygon_232",
+          "element": "boundary",
+          "datatype": 0,
+          "xy": [
+            [
+              0,
+              1450
+            ],
+            [
+              0,
+              3150
+            ],
+            [
+              2700,
+              3150
+            ],
+            [
+              2700,
+              1450
+            ],
+            [
+              0,
+              1450
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [
+            "polygon_223"
+          ],
+          "isVia": false,
+          "layer_name": "BSPowerRail",
+          "topPolygon": false,
+          "layerMap": [
+            "polygon_223",
+            "polygon_223",
+            "polygon_217"
+          ],
+          "textPolygons": [
+            "text_29"
+          ],
+          "layer": 300
+        },
+        {
+          "element": "text",
+          "id": "text_28",
+          "datatype": 1,
+          "xy": [
+            [
+              1350,
+              425
+            ]
+          ],
+          "presentation": 1,
+          "text": "VSS",
+          "layer": 300,
+          "strans": 32768
+        },
+        {
+          "element": "text",
+          "id": "text_29",
+          "datatype": 1,
+          "xy": [
+            [
+              1350,
+              1875
+            ]
+          ],
+          "presentation": 1,
+          "text": "VDD",
+          "layer": 300,
+          "strans": 32768
+        },
+        {
+          "id": "polygon_229",
+          "element": "boundary",
+          "datatype": 0,
+          "xy": [
+            [
+              200,
+              720
+            ],
+            [
+              200,
+              960
+            ],
+            [
+              2500,
+              960
+            ],
+            [
+              2500,
+              720
+            ],
+            [
+              200,
+              720
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [
+            "polygon_231",
+            "polygon_230"
+          ],
+          "isVia": false,
+          "layer_name": "M0",
+          "topPolygon": true,
+          "layerMap": [
+            "polygon_230",
+            "polygon_213",
+            "polygon_230",
+            "polygon_231",
+            "polygon_215",
+            "polygon_231"
+          ],
+          "textPolygons": [
+            "text_27"
+          ],
+          "layer": 200
+        },
+        {
+          "id": "polygon_227",
+          "element": "boundary",
+          "datatype": 0,
+          "xy": [
+            [
+              200,
+              1760
+            ],
+            [
+              200,
+              2000
+            ],
+            [
+              1100,
+              2000
+            ],
+            [
+              1100,
+              1760
+            ],
+            [
+              200,
+              1760
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [
+            "polygon_225"
+          ],
+          "isVia": false,
+          "layer_name": "M0",
+          "topPolygon": true,
+          "layerMap": [
+            "polygon_225",
+            "polygon_221"
+          ],
+          "textPolygons": [
+            "text_25"
+          ],
+          "layer": 200
+        },
+        {
+          "id": "polygon_228",
+          "element": "boundary",
+          "datatype": 0,
+          "xy": [
+            [
+              1600,
+              1760
+            ],
+            [
+              1600,
+              2000
+            ],
+            [
+              2500,
+              2000
+            ],
+            [
+              2500,
+              1760
+            ],
+            [
+              1600,
+              1760
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [
+            "polygon_226"
+          ],
+          "isVia": false,
+          "layer_name": "M0",
+          "topPolygon": true,
+          "layerMap": [
+            "polygon_226",
+            "polygon_222"
+          ],
+          "textPolygons": [
+            "text_26"
+          ],
+          "layer": 200
+        },
+        {
+          "element": "text",
+          "id": "text_25",
+          "datatype": 1,
+          "xy": [
+            [
+              900,
+              1880
+            ]
+          ],
+          "presentation": 1,
+          "text": "A2",
+          "layer": 200,
+          "strans": 32768
+        },
+        {
+          "element": "text",
+          "id": "text_26",
+          "datatype": 1,
+          "xy": [
+            [
+              1800,
+              1880
+            ]
+          ],
+          "presentation": 1,
+          "text": "A1",
+          "layer": 200,
+          "strans": 32768
+        },
+        {
+          "element": "text",
+          "id": "text_27",
+          "datatype": 1,
+          "xy": [
+            [
+              450,
+              840
+            ]
+          ],
+          "presentation": 1,
+          "text": "ZN",
+          "layer": 200,
+          "strans": 32768
+        },
+        {
+          "id": "polygon_240",
+          "element": "boundary",
+          "datatype": 0,
+          "xy": [
+            [
+              0,
+              300
+            ],
+            [
+              0,
+              540
+            ],
+            [
+              2700,
+              540
+            ],
+            [
+              2700,
+              300
+            ],
+            [
+              0,
+              300
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [],
+          "isVia": false,
+          "layer_name": "HorizontalTracks",
+          "topPolygon": false,
+          "layerMap": [],
+          "textPolygons": [],
+          "layer": 220
+        },
+        {
+          "id": "polygon_239",
+          "element": "boundary",
+          "datatype": 0,
+          "xy": [
+            [
+              0,
+              720
+            ],
+            [
+              0,
+              960
+            ],
+            [
+              2700,
+              960
+            ],
+            [
+              2700,
+              720
+            ],
+            [
+              0,
+              720
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [],
+          "isVia": false,
+          "layer_name": "HorizontalTracks",
+          "topPolygon": false,
+          "layerMap": [],
+          "textPolygons": [],
+          "layer": 220
+        },
+        {
+          "id": "polygon_238",
+          "element": "boundary",
+          "datatype": 0,
+          "xy": [
+            [
+              0,
+              1340
+            ],
+            [
+              0,
+              1580
+            ],
+            [
+              2700,
+              1580
+            ],
+            [
+              2700,
+              1340
+            ],
+            [
+              0,
+              1340
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [],
+          "isVia": false,
+          "layer_name": "HorizontalTracks",
+          "topPolygon": false,
+          "layerMap": [],
+          "textPolygons": [],
+          "layer": 220
+        },
+        {
+          "id": "polygon_237",
+          "element": "boundary",
+          "datatype": 0,
+          "xy": [
+            [
+              0,
+              1760
+            ],
+            [
+              0,
+              2000
+            ],
+            [
+              2700,
+              2000
+            ],
+            [
+              2700,
+              1760
+            ],
+            [
+              0,
+              1760
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [],
+          "isVia": false,
+          "layer_name": "HorizontalTracks",
+          "topPolygon": false,
+          "layerMap": [],
+          "textPolygons": [],
+          "layer": 220
+        },
+        {
+          "id": "polygon_243",
+          "element": "boundary",
+          "datatype": 0,
+          "xy": [
+            [
+              270,
+              0
+            ],
+            [
+              270,
+              2300
+            ],
+            [
+              630,
+              2300
+            ],
+            [
+              630,
+              0
+            ],
+            [
+              270,
+              0
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [],
+          "isVia": false,
+          "layer_name": "VerticalTracks",
+          "topPolygon": false,
+          "layerMap": [],
+          "textPolygons": [],
+          "layer": 221
+        },
+        {
+          "id": "polygon_244",
+          "element": "boundary",
+          "datatype": 0,
+          "xy": [
+            [
+              870,
+              0
+            ],
+            [
+              870,
+              2300
+            ],
+            [
+              1230,
+              2300
+            ],
+            [
+              1230,
+              0
+            ],
+            [
+              870,
+              0
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [],
+          "isVia": false,
+          "layer_name": "VerticalTracks",
+          "topPolygon": false,
+          "layerMap": [],
+          "textPolygons": [],
+          "layer": 221
+        },
+        {
+          "id": "polygon_245",
+          "element": "boundary",
+          "datatype": 0,
+          "xy": [
+            [
+              1470,
+              0
+            ],
+            [
+              1470,
+              2300
+            ],
+            [
+              1830,
+              2300
+            ],
+            [
+              1830,
+              0
+            ],
+            [
+              1470,
+              0
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [],
+          "isVia": false,
+          "layer_name": "VerticalTracks",
+          "topPolygon": false,
+          "layerMap": [],
+          "textPolygons": [],
+          "layer": 221
+        },
+        {
+          "id": "polygon_246",
+          "element": "boundary",
+          "datatype": 0,
+          "xy": [
+            [
+              2070,
+              0
+            ],
+            [
+              2070,
+              2300
+            ],
+            [
+              2430,
+              2300
+            ],
+            [
+              2430,
+              0
+            ],
+            [
+              2070,
+              0
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [],
+          "isVia": false,
+          "layer_name": "VerticalTracks",
+          "topPolygon": false,
+          "layerMap": [],
+          "textPolygons": [],
+          "layer": 221
+        },
+        {
+          "id": "polygon_249",
+          "element": "boundary",
+          "datatype": 0,
+          "xy": [
+            [
+              0,
+              430
+            ],
+            [
+              0,
+              750
+            ],
+            [
+              2700,
+              750
+            ],
+            [
+              2700,
+              430
+            ],
+            [
+              0,
+              430
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [],
+          "isVia": false,
+          "layer_name": "HorizontalTracks_M2",
+          "topPolygon": false,
+          "layerMap": [],
+          "textPolygons": [],
+          "layer": 222
+        },
+        {
+          "id": "polygon_248",
+          "element": "boundary",
+          "datatype": 0,
+          "xy": [
+            [
+              0,
+              990
+            ],
+            [
+              0,
+              1310
+            ],
+            [
+              2700,
+              1310
+            ],
+            [
+              2700,
+              990
+            ],
+            [
+              0,
+              990
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [],
+          "isVia": false,
+          "layer_name": "HorizontalTracks_M2",
+          "topPolygon": false,
+          "layerMap": [],
+          "textPolygons": [],
+          "layer": 222
+        },
+        {
+          "id": "polygon_247",
+          "element": "boundary",
+          "datatype": 0,
+          "xy": [
+            [
+              0,
+              1550
+            ],
+            [
+              0,
+              1870
+            ],
+            [
+              2700,
+              1870
+            ],
+            [
+              2700,
+              1550
+            ],
+            [
+              0,
+              1550
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [],
+          "isVia": false,
+          "layer_name": "HorizontalTracks_M2",
+          "topPolygon": false,
+          "layerMap": [],
+          "textPolygons": [],
+          "layer": 222
+        },
+        {
+          "id": "polygon_236",
+          "element": "boundary",
+          "datatype": 0,
+          "xy": [
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              2300
+            ],
+            [
+              2700,
+              2300
+            ],
+            [
+              2700,
+              0
+            ],
+            [
+              0,
+              0
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [],
+          "isVia": false,
+          "layer_name": "Boundary",
+          "topPolygon": false,
+          "layerMap": [],
+          "textPolygons": [],
+          "layer": 1
+        },
+        {
+          "id": "polygon_234_dup",
+          "element": "boundary",
+          "datatype": 1,
+          "xy": [
+            [
+              150,
+              440
+            ],
+            [
+              150,
+              740
+            ],
+            [
+              2550,
+              740
+            ],
+            [
+              2550,
+              440
+            ],
+            [
+              150,
+              440
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [],
+          "isVia": false,
+          "layer_name": "NmosNanoSheet",
+          "topPolygon": false,
+          "layerMap": [],
+          "textPolygons": [],
+          "layer": 100
+        },
+        {
+          "id": "polygon_235_dup",
+          "element": "boundary",
+          "datatype": 1,
+          "xy": [
+            [
+              150,
+              1560
+            ],
+            [
+              150,
+              1860
+            ],
+            [
+              2550,
+              1860
+            ],
+            [
+              2550,
+              1560
+            ],
+            [
+              150,
+              1560
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [],
+          "isVia": false,
+          "layer_name": "PmosNanoSheet",
+          "topPolygon": false,
+          "layerMap": [],
+          "textPolygons": [],
+          "layer": 101
+        },
+        {
+          "id": "polygon_233_dup",
+          "element": "boundary",
+          "datatype": 2,
+          "xy": [
+            [
+              0,
+              -850
+            ],
+            [
+              0,
+              850
+            ],
+            [
+              2700,
+              850
+            ],
+            [
+              2700,
+              -850
+            ],
+            [
+              0,
+              -850
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [
+            "polygon_224"
+          ],
+          "isVia": false,
+          "layer_name": "BSPowerRail",
+          "topPolygon": false,
+          "layerMap": [
+            "polygon_224",
+            "polygon_214",
+            "polygon_224"
+          ],
+          "textPolygons": [
+            "text_28"
+          ],
+          "layer": 300
+        },
+        {
+          "id": "polygon_232_dup",
+          "element": "boundary",
+          "datatype": 2,
+          "xy": [
+            [
+              0,
+              1450
+            ],
+            [
+              0,
+              3150
+            ],
+            [
+              2700,
+              3150
+            ],
+            [
+              2700,
+              1450
+            ],
+            [
+              0,
+              1450
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [
+            "polygon_223"
+          ],
+          "isVia": false,
+          "layer_name": "BSPowerRail",
+          "topPolygon": false,
+          "layerMap": [
+            "polygon_223",
+            "polygon_223",
+            "polygon_217"
+          ],
+          "textPolygons": [
+            "text_29"
+          ],
+          "layer": 300
+        },
+        {
+          "element": "text",
+          "id": "text_28_dup",
+          "datatype": 3,
+          "xy": [
+            [
+              1350,
+              425
+            ]
+          ],
+          "presentation": 1,
+          "text": "VSS",
+          "layer": 300,
+          "strans": 32768
+        },
+        {
+          "element": "text",
+          "id": "text_29_dup",
+          "datatype": 3,
+          "xy": [
+            [
+              1350,
+              1875
+            ]
+          ],
+          "presentation": 1,
+          "text": "VDD",
+          "layer": 300,
+          "strans": 32768
+        },
+        {
+          "id": "polygon_219_ext",
+          "element": "boundary",
+          "datatype": 1,
+          "xy": [
+            [
+              750,
+              0
+            ],
+            [
+              1050,
+              0
+            ],
+            [
+              1050,
+              2300
+            ],
+            [
+              750,
+              2300
+            ],
+            [
+              750,
+              0
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [],
+          "isVia": false,
+          "layer_name": "NMOSGate",
+          "topPolygon": false,
+          "layerMap": [
+            "polygon_221"
+          ],
+          "textPolygons": [],
+          "layer": 102
+        },
+        {
+          "id": "polygon_220_ext",
+          "element": "boundary",
+          "datatype": 1,
+          "xy": [
+            [
+              1650,
+              0
+            ],
+            [
+              1950,
+              0
+            ],
+            [
+              1950,
+              2300
+            ],
+            [
+              1650,
+              2300
+            ],
+            [
+              1650,
+              0
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [],
+          "isVia": false,
+          "layer_name": "NMOSGate",
+          "topPolygon": false,
+          "layerMap": [
+            "polygon_222"
+          ],
+          "textPolygons": [],
+          "layer": 102
+        },
+        {
+          "id": "polygon_221_ext",
+          "element": "boundary",
+          "datatype": 1,
+          "xy": [
+            [
+              750,
+              0
+            ],
+            [
+              1050,
+              0
+            ],
+            [
+              1050,
+              2300
+            ],
+            [
+              750,
+              2300
+            ],
+            [
+              750,
+              0
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [],
+          "isVia": false,
+          "layer_name": "PMOSGate",
+          "topPolygon": false,
+          "layerMap": [
+            "polygon_225",
+            "polygon_227",
+            "polygon_219"
+          ],
+          "textPolygons": [],
+          "layer": 103
+        },
+        {
+          "id": "polygon_222_ext",
+          "element": "boundary",
+          "datatype": 1,
+          "xy": [
+            [
+              1650,
+              0
+            ],
+            [
+              1950,
+              0
+            ],
+            [
+              1950,
+              2300
+            ],
+            [
+              1650,
+              2300
+            ],
+            [
+              1650,
+              0
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [],
+          "isVia": false,
+          "layer_name": "PMOSGate",
+          "topPolygon": false,
+          "layerMap": [
+            "polygon_226",
+            "polygon_228",
+            "polygon_220"
+          ],
+          "textPolygons": [],
+          "layer": 103
+        },
+        {
+          "id": "polygon_241_ext",
+          "element": "boundary",
+          "datatype": 1,
+          "xy": [
+            [
+              -150,
+              0
+            ],
+            [
+              150,
+              0
+            ],
+            [
+              150,
+              2300
+            ],
+            [
+              -150,
+              2300
+            ],
+            [
+              -150,
+              0
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [],
+          "isVia": false,
+          "layer_name": "Diffusion_Break",
+          "topPolygon": false,
+          "layerMap": [],
+          "textPolygons": [],
+          "layer": 102
+        },
+        {
+          "id": "polygon_242_ext",
+          "element": "boundary",
+          "datatype": 1,
+          "xy": [
+            [
+              2550,
+              0
+            ],
+            [
+              2850,
+              0
+            ],
+            [
+              2850,
+              2300
+            ],
+            [
+              2550,
+              2300
+            ],
+            [
+              2550,
+              0
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [],
+          "isVia": false,
+          "layer_name": "Diffusion_Break",
+          "topPolygon": false,
+          "layerMap": [],
+          "textPolygons": [],
+          "layer": 102
+        },
+        {
+          "id": "polygon_241_ext",
+          "element": "boundary",
+          "datatype": 1,
+          "xy": [
+            [
+              -150,
+              0
+            ],
+            [
+              150,
+              0
+            ],
+            [
+              150,
+              2300
+            ],
+            [
+              -150,
+              2300
+            ],
+            [
+              -150,
+              0
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [],
+          "isVia": false,
+          "layer_name": "Diffusion_Break",
+          "topPolygon": false,
+          "layerMap": [],
+          "textPolygons": [],
+          "layer": 103
+        },
+        {
+          "id": "polygon_242_ext",
+          "element": "boundary",
+          "datatype": 1,
+          "xy": [
+            [
+              2550,
+              0
+            ],
+            [
+              2850,
+              0
+            ],
+            [
+              2850,
+              2300
+            ],
+            [
+              2550,
+              2300
+            ],
+            [
+              2550,
+              0
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [],
+          "isVia": false,
+          "layer_name": "Diffusion_Break",
+          "topPolygon": false,
+          "layerMap": [],
+          "textPolygons": [],
+          "layer": 103
+        },
+        {
+          "element": "boundary",
+          "layer": 102,
+          "datatype": 2,
+          "xy": [
+            [
+              450,
+              200
+            ],
+            [
+              2250,
+              200
+            ],
+            [
+              2250,
+              0
+            ],
+            [
+              450,
+              0
+            ],
+            [
+              450,
+              200
+            ]
+          ],
+          "id": "polygon_220_cut_1",
+          "planarConnected": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "connections": []
+        },
+        {
+          "element": "boundary",
+          "layer": 102,
+          "datatype": 2,
+          "xy": [
+            [
+              450,
+              2300
+            ],
+            [
+              2250,
+              2300
+            ],
+            [
+              2250,
+              2100
+            ],
+            [
+              450,
+              2100
+            ],
+            [
+              450,
+              2300
+            ]
+          ],
+          "id": "polygon_220_cut_1",
+          "planarConnected": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "connections": []
+        },
+        {
+          "element": "boundary",
+          "layer": 102,
+          "datatype": 2,
+          "xy": [
+            [
+              450,
+              0
+            ],
+            [
+              450,
+              2300
+            ],
+            [
+              0,
+              2300
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              450,
+              0
+            ]
+          ],
+          "id": "polygon_220_cut_2",
+          "planarConnected": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "connections": []
+        },
+        {
+          "element": "boundary",
+          "layer": 102,
+          "datatype": 2,
+          "xy": [
+            [
+              2700,
+              0
+            ],
+            [
+              2700,
+              2300
+            ],
+            [
+              2250,
+              2300
+            ],
+            [
+              2250,
+              0
+            ],
+            [
+              2700,
+              0
+            ]
+          ],
+          "id": "polygon_220_cut_3",
+          "planarConnected": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "connections": []
+        },
+        {
+          "element": "boundary",
+          "layer": 103,
+          "datatype": 2,
+          "xy": [
+            [
+              450,
+              200
+            ],
+            [
+              2250,
+              200
+            ],
+            [
+              2250,
+              0
+            ],
+            [
+              450,
+              0
+            ],
+            [
+              450,
+              200
+            ]
+          ],
+          "id": "polygon_222_cut_1",
+          "planarConnected": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "connections": []
+        },
+        {
+          "element": "boundary",
+          "layer": 103,
+          "datatype": 2,
+          "xy": [
+            [
+              450,
+              2300
+            ],
+            [
+              2250,
+              2300
+            ],
+            [
+              2250,
+              2100
+            ],
+            [
+              450,
+              2100
+            ],
+            [
+              450,
+              2300
+            ]
+          ],
+          "id": "polygon_222_cut_1",
+          "planarConnected": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "connections": []
+        },
+        {
+          "element": "boundary",
+          "layer": 103,
+          "datatype": 2,
+          "xy": [
+            [
+              450,
+              0
+            ],
+            [
+              450,
+              2300
+            ],
+            [
+              0,
+              2300
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              450,
+              0
+            ]
+          ],
+          "id": "polygon_222_cut_2",
+          "planarConnected": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "connections": []
+        },
+        {
+          "element": "boundary",
+          "layer": 103,
+          "datatype": 2,
+          "xy": [
+            [
+              2700,
+              0
+            ],
+            [
+              2700,
+              2300
+            ],
+            [
+              2250,
+              2300
+            ],
+            [
+              2250,
+              0
+            ],
+            [
+              2700,
+              0
+            ]
+          ],
+          "id": "polygon_222_cut_3",
+          "planarConnected": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "connections": []
+        },
+        {
+          "id": "polygon_229_pin",
+          "element": "boundary",
+          "datatype": 2,
+          "xy": [
+            [
+              200,
+              720
+            ],
+            [
+              200,
+              960
+            ],
+            [
+              2500,
+              960
+            ],
+            [
+              2500,
+              720
+            ],
+            [
+              200,
+              720
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [
+            "polygon_231",
+            "polygon_230"
+          ],
+          "isVia": false,
+          "layer_name": "M0",
+          "topPolygon": false,
+          "layerMap": [
+            "polygon_230",
+            "polygon_213",
+            "polygon_230",
+            "polygon_231",
+            "polygon_215",
+            "polygon_231"
+          ],
+          "textPolygons": [
+            "text_27"
+          ],
+          "layer": 200
+        },
+        {
+          "element": "text",
+          "id": "text_27_pin",
+          "datatype": 3,
+          "xy": [
+            [
+              450,
+              840
+            ]
+          ],
+          "presentation": 1,
+          "text": "ZN",
+          "layer": 200,
+          "adjacencyList": [
+            "polygon_231",
+            "polygon_230"
+          ],
+          "isVia": false
+        },
+        {
+          "id": "polygon_227_pin",
+          "element": "boundary",
+          "datatype": 2,
+          "xy": [
+            [
+              200,
+              1760
+            ],
+            [
+              200,
+              2000
+            ],
+            [
+              1100,
+              2000
+            ],
+            [
+              1100,
+              1760
+            ],
+            [
+              200,
+              1760
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [
+            "polygon_225"
+          ],
+          "isVia": false,
+          "layer_name": "M0",
+          "topPolygon": false,
+          "layerMap": [
+            "polygon_225",
+            "polygon_221"
+          ],
+          "textPolygons": [
+            "text_25"
+          ],
+          "layer": 200
+        },
+        {
+          "element": "text",
+          "id": "text_25_pin",
+          "datatype": 3,
+          "xy": [
+            [
+              900,
+              1880
+            ]
+          ],
+          "presentation": 1,
+          "text": "A2",
+          "layer": 200,
+          "adjacencyList": [
+            "polygon_225"
+          ],
+          "isVia": false
+        },
+        {
+          "id": "polygon_228_pin",
+          "element": "boundary",
+          "datatype": 2,
+          "xy": [
+            [
+              1600,
+              1760
+            ],
+            [
+              1600,
+              2000
+            ],
+            [
+              2500,
+              2000
+            ],
+            [
+              2500,
+              1760
+            ],
+            [
+              1600,
+              1760
+            ]
+          ],
+          "planarConnectedPolygon": null,
+          "connectedGate": null,
+          "connectedInterconnect": null,
+          "adjacencyList": [
+            "polygon_226"
+          ],
+          "isVia": false,
+          "layer_name": "M0",
+          "topPolygon": false,
+          "layerMap": [
+            "polygon_226",
+            "polygon_222"
+          ],
+          "textPolygons": [
+            "text_26"
+          ],
+          "layer": 200
+        },
+        {
+          "element": "text",
+          "id": "text_26_pin",
+          "datatype": 3,
+          "xy": [
+            [
+              1800,
+              1880
+            ]
+          ],
+          "presentation": 1,
+          "text": "A1",
+          "layer": 200,
+          "adjacencyList": [
+            "polygon_226"
+          ],
+          "isVia": false
+        }
+      ]
+    }
+  ],
+  "base_layout_name": "53/NR2D1/NR2D1_layouts//NR2D1_1_RT_4.gds"
+}

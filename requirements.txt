@@ -1,0 +1,16 @@
+streamlit>=1.45,<2
+klayout>=0.30
+pandas>=2.2,<3
+plotly>=6,<7
+python-dotenv>=1.0,<2
+
+# Primary AI backend. Only needed when ANTHROPIC_API_KEY is set; the dashboard
+# and every deterministic answer work without it.
+anthropic>=0.60
+
+# Test-only. `python -m pytest` is used in the setup walkthrough.
+pytest>=8
+
+# Optional legacy backend, used only when LLM_PROVIDER=openai. The local Ollama
+# fallback talks to its server over stdlib HTTP and needs no extra package.
+openai>=1.90,<2

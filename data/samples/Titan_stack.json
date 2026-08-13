@@ -1,0 +1,57 @@
+{
+  "technology": "Titan (stack transcribed from the semantic sidecar via layer names)",
+  "_comment": [
+    "The vertical connection stack is the one thing a .gds and a .lyp cannot tell you:",
+    "GDSII stores no layer elevations, and a .lyp stores colours and names. This file",
+    "supplies it explicitly, so the net graph is built from a stated stack rather than",
+    "guessed from geometry.",
+    "",
+    "These values are transcribed from the via layer names in the JSON sidecars, which",
+    "name each via after its two endpoints (VIA_M0_M1, VIA_M0_PMOSGate,",
+    "VIA_Inteconnect_BSPowerRail). The layer numbers agree with the .lyp, so the two",
+    "sources cross-check. They have still not been checked against a real Titan PDK.",
+    "",
+    "Two corrections the sidecar names forced, both of which the .lyp names alone got",
+    "wrong:",
+    "  1. NDIFFCON / PDIFFCON are named NMOSInterconnect / PMOSInterconnect in the",
+    "     sidecar. They are local interconnect CONDUCTORS, not contacts. Treating them",
+    "     as contacts bridging diffusion to M0 shorted a whole cell into one net.",
+    "  2. N-VIAT / P-VIAT land on those interconnect layers, not on the diffusion",
+    "     (nanosheet) layers directly.",
+    "",
+    "This technology uses backside power delivery (the .lyp contains BSPDN-PMOS-VIA),",
+    "so BM0 is backside metal reached through DVB, not through the frontside vias that",
+    "merely overlap it in plan view."
+  ],
+
+  "_roles_comment": [
+    "Corrects the role heuristic, which reads a name ending in CON as a contact.",
+    "Only layers whose inferred role is wrong need listing."
+  ],
+  "roles": {
+    "NDIFFCON": "metal",
+    "PDIFFCON": "metal"
+  },
+
+  "connections": {
+    "N-VIAG": ["NPOLY", "M0"],
+    "P-VIAG": ["PPOLY", "M0"],
+    "N-VIAT": ["NDIFFCON", "M0"],
+    "P-VIAT": ["PDIFFCON", "M0"],
+    "VIA0": ["M0", "M1"],
+    "VIA1": ["M1", "M2"],
+    "DVB": ["BM0", "NDIFFCON", "PDIFFCON"],
+    "BSPDN-PMOS-VIA": ["BM0", "PDIFFCON"]
+  },
+
+  "_same_level_comment": [
+    "A gate crossing both wells is drawn as NPOLY over one and PPOLY over the other;",
+    "the two abut edge-to-edge and form one continuous conductor. Without this, an",
+    "NPOLY gate finger with no via of its own is reported as floating when it is in",
+    "fact part of a PPOLY net. Measured in NR2D1: NPOLY and PPOLY touch at 2 places",
+    "with zero overlap area, i.e. they meet edge-to-edge rather than stacking."
+  ],
+  "same_level": [
+    ["NPOLY", "PPOLY"]
+  ]
+}

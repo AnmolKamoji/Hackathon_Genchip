@@ -1,0 +1,20 @@
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+.streamlit/secrets.toml
+reports/
+uploads/
+
+# Windows "downloaded from the internet" markers left behind by ZIP extraction.
+*:Zone.Identifier
+
+# --- Confidential third-party material -----------------------------------------
+# The GENCHIP Design Rule Manual states it may not be "reproduced, transmitted, or
+# translated, in any form or by any means" without written permission, and is
+# subject to US export control law. Both the manual and the rules transcribed from
+# it are therefore excluded by default. Remove these lines only with permission.
+data/*.pdf
+data/genchip_drm_rules.json

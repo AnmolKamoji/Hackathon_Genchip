@@ -1,0 +1,687 @@
+{
+  "schema_version": "1.1-sidecar",
+  "source": {
+    "file": "NR2D1_2_RT_4.gds",
+    "format": "GDSII + semantic JSON sidecar",
+    "dbu_um": 5e-05
+  },
+  "design": {
+    "top_cell": "NR2D1",
+    "top_cell_index": 0,
+    "cell_count": 1,
+    "layer_count": 36,
+    "polygon_count": 67,
+    "shape_count": 81,
+    "text_count": 14,
+    "via_count": 9
+  },
+  "layout": {
+    "bbox_dbu": {
+      "left": -150,
+      "bottom": -850,
+      "right": 2850,
+      "top": 3150
+    },
+    "width_um": 0.15,
+    "height_um": 0.2,
+    "bbox_area_um2": 0.03
+  },
+  "cells": [
+    {
+      "name": "NR2D1",
+      "index": 0,
+      "width_um": null,
+      "height_um": null,
+      "area_um2": null,
+      "instance_count": 0
+    }
+  ],
+  "layers": [
+    {
+      "layer": 1,
+      "datatype": 0,
+      "name": "Boundary",
+      "polygon_count": 1,
+      "shape_count": 1,
+      "via_count": 0,
+      "text_count": 0,
+      "area_um2": null,
+      "density_percent": null,
+      "semantic": {
+        "via": false,
+        "connected_polygon_refs": []
+      }
+    },
+    {
+      "layer": 100,
+      "datatype": 0,
+      "name": "NmosNanoSheet",
+      "polygon_count": 1,
+      "shape_count": 1,
+      "via_count": 0,
+      "text_count": 0,
+      "area_um2": null,
+      "density_percent": null,
+      "semantic": {
+        "via": false,
+        "connected_polygon_refs": []
+      }
+    },
+    {
+      "layer": 100,
+      "datatype": 1,
+      "name": "NmosNanoSheet",
+      "polygon_count": 1,
+      "shape_count": 1,
+      "via_count": 0,
+      "text_count": 0,
+      "area_um2": null,
+      "density_percent": null,
+      "semantic": {
+        "via": false,
+        "connected_polygon_refs": []
+      }
+    },
+    {
+      "layer": 101,
+      "datatype": 0,
+      "name": "PmosNanoSheet",
+      "polygon_count": 1,
+      "shape_count": 1,
+      "via_count": 0,
+      "text_count": 0,
+      "area_um2": null,
+      "density_percent": null,
+      "semantic": {
+        "via": false,
+        "connected_polygon_refs": []
+      }
+    },
+    {
+      "layer": 101,
+      "datatype": 1,
+      "name": "PmosNanoSheet",
+      "polygon_count": 1,
+      "shape_count": 1,
+      "via_count": 0,
+      "text_count": 0,
+      "area_um2": null,
+      "density_percent": null,
+      "semantic": {
+        "via": false,
+        "connected_polygon_refs": []
+      }
+    },
+    {
+      "layer": 102,
+      "datatype": 1,
+      "name": "Diffusion_Break",
+      "polygon_count": 2,
+      "shape_count": 2,
+      "via_count": 0,
+      "text_count": 0,
+      "area_um2": null,
+      "density_percent": null,
+      "semantic": {
+        "via": false,
+        "connected_polygon_refs": []
+      }
+    },
+    {
+      "layer": 102,
+      "datatype": 0,
+      "name": "NMOSGate",
+      "polygon_count": 2,
+      "shape_count": 2,
+      "via_count": 0,
+      "text_count": 0,
+      "area_um2": null,
+      "density_percent": null,
+      "semantic": {
+        "via": false,
+        "connected_polygon_refs": [
+          "polygon_258",
+          "polygon_259"
+        ]
+      }
+    },
+    {
+      "layer": 102,
+      "datatype": 1,
+      "name": "NMOSGate",
+      "polygon_count": 2,
+      "shape_count": 2,
+      "via_count": 0,
+      "text_count": 0,
+      "area_um2": null,
+      "density_percent": null,
+      "semantic": {
+        "via": false,
+        "connected_polygon_refs": [
+          "polygon_258",
+          "polygon_259"
+        ]
+      }
+    },
+    {
+      "layer": 102,
+      "datatype": 2,
+      "name": "layer_102",
+      "polygon_count": 4,
+      "shape_count": 4,
+      "via_count": 0,
+      "text_count": 0,
+      "area_um2": null,
+      "density_percent": null,
+      "semantic": {
+        "via": false,
+        "connected_polygon_refs": []
+      }
+    },
+    {
+      "layer": 103,
+      "datatype": 1,
+      "name": "Diffusion_Break",
+      "polygon_count": 2,
+      "shape_count": 2,
+      "via_count": 0,
+      "text_count": 0,
+      "area_um2": null,
+      "density_percent": null,
+      "semantic": {
+        "via": false,
+        "connected_polygon_refs": []
+      }
+    },
+    {
+      "layer": 103,
+      "datatype": 2,
+      "name": "layer_103",
+      "polygon_count": 4,
+      "shape_count": 4,
+      "via_count": 0,
+      "text_count": 0,
+      "area_um2": null,
+      "density_percent": null,
+      "semantic": {
+        "via": false,
+        "connected_polygon_refs": []
+      }
+    },
+    {
+      "layer": 103,
+      "datatype": 0,
+      "name": "PMOSGate",
+      "polygon_count": 2,
+      "shape_count": 2,
+      "via_count": 0,
+      "text_count": 0,
+      "area_um2": null,
+      "density_percent": null,
+      "semantic": {
+        "via": false,
+        "connected_polygon_refs": [
+          "polygon_256",
+          "polygon_257",
+          "polygon_263",
+          "polygon_264",
+          "polygon_265",
+          "polygon_266"
+        ]
+      }
+    },
+    {
+      "layer": 103,
+      "datatype": 1,
+      "name": "PMOSGate",
+      "polygon_count": 2,
+      "shape_count": 2,
+      "via_count": 0,
+      "text_count": 0,
+      "area_um2": null,
+      "density_percent": null,
+      "semantic": {
+        "via": false,
+        "connected_polygon_refs": [
+          "polygon_256",
+          "polygon_257",
+          "polygon_263",
+          "polygon_264",
+          "polygon_265",
+          "polygon_266"
+        ]
+      }
+    },
+    {
+      "layer": 104,
+      "datatype": 0,
+      "name": "NMOSInterconnect",
+      "polygon_count": 3,
+      "shape_count": 3,
+      "via_count": 0,
+      "text_count": 0,
+      "area_um2": null,
+      "density_percent": null,
+      "semantic": {
+        "via": false,
+        "connected_polygon_refs": [
+          "polygon_261",
+          "polygon_262",
+          "polygon_268",
+          "polygon_270",
+          "polygon_272"
+        ]
+      }
+    },
+    {
+      "layer": 105,
+      "datatype": 0,
+      "name": "PMOSInterconnect",
+      "polygon_count": 3,
+      "shape_count": 3,
+      "via_count": 0,
+      "text_count": 0,
+      "area_um2": null,
+      "density_percent": null,
+      "semantic": {
+        "via": false,
+        "connected_polygon_refs": [
+          "polygon_260",
+          "polygon_267",
+          "polygon_269",
+          "polygon_271"
+        ]
+      }
+    },
+    {
+      "layer": 106,
+      "datatype": 0,
+      "name": "VIA_M0_PMOSGate",
+      "polygon_count": 2,
+      "shape_count": 2,
+      "via_count": 2,
+      "text_count": 0,
+      "area_um2": null,
+      "density_percent": null,
+      "semantic": {
+        "via": true,
+        "connected_polygon_refs": [
+          "polygon_258",
+          "polygon_259",
+          "polygon_265",
+          "polygon_266"
+        ]
+      }
+    },
+    {
+      "layer": 108,
+      "datatype": 0,
+      "name": "VIA_M0_PMOSInterconnect",
+      "polygon_count": 1,
+      "shape_count": 1,
+      "via_count": 1,
+      "text_count": 0,
+      "area_um2": null,
+      "density_percent": null,
+      "semantic": {
+        "via": true,
+        "connected_polygon_refs": [
+          "polygon_255",
+          "polygon_267"
+        ]
+      }
+    },
+    {
+      "layer": 109,
+      "datatype": 0,
+      "name": "VIA_M0_NMOSInterconnect",
+      "polygon_count": 1,
+      "shape_count": 1,
+      "via_count": 1,
+      "text_count": 0,
+      "area_um2": null,
+      "density_percent": null,
+      "semantic": {
+        "via": true,
+        "connected_polygon_refs": [
+          "polygon_251",
+          "polygon_268"
+        ]
+      }
+    },
+    {
+      "layer": 111,
+      "datatype": 0,
+      "name": "VIA_Inteconnect_BSPowerRail",
+      "polygon_count": 3,
+      "shape_count": 3,
+      "via_count": 3,
+      "text_count": 0,
+      "area_um2": null,
+      "density_percent": null,
+      "semantic": {
+        "via": true,
+        "connected_polygon_refs": [
+          "polygon_250",
+          "polygon_252",
+          "polygon_253",
+          "polygon_271",
+          "polygon_272"
+        ]
+      }
+    },
+    {
+      "layer": 121,
+      "datatype": 0,
+      "name": "Diffusion_Break",
+      "polygon_count": 2,
+      "shape_count": 2,
+      "via_count": 0,
+      "text_count": 0,
+      "area_um2": null,
+      "density_percent": null,
+      "semantic": {
+        "via": false,
+        "connected_polygon_refs": []
+      }
+    },
+    {
+      "layer": 200,
+      "datatype": 0,
+      "name": "M0",
+      "polygon_count": 4,
+      "shape_count": 4,
+      "via_count": 0,
+      "text_count": 0,
+      "area_um2": null,
+      "density_percent": null,
+      "semantic": {
+        "via": false,
+        "connected_polygon_refs": [
+          "polygon_251",
+          "polygon_255",
+          "polygon_258",
+          "polygon_259",
+          "polygon_263",
+          "polygon_264",
+          "polygon_269",
+          "polygon_270",
+          "polygon_282",
+          "polygon_283",
+          "polygon_288"
+        ]
+      }
+    },
+    {
+      "layer": 200,
+      "datatype": 2,
+      "name": "M0",
+      "polygon_count": 4,
+      "shape_count": 4,
+      "via_count": 0,
+      "text_count": 0,
+      "area_um2": null,
+      "density_percent": null,
+      "semantic": {
+        "via": false,
+        "connected_polygon_refs": [
+          "polygon_251",
+          "polygon_255",
+          "polygon_258",
+          "polygon_259",
+          "polygon_263",
+          "polygon_264",
+          "polygon_269",
+          "polygon_270",
+          "polygon_282",
+          "polygon_283",
+          "polygon_288"
+        ]
+      }
+    },
+    {
+      "layer": 200,
+      "datatype": 1,
+      "name": "layer_200",
+      "polygon_count": 0,
+      "shape_count": 4,
+      "via_count": 0,
+      "text_count": 4,
+      "area_um2": null,
+      "density_percent": null,
+      "semantic": {
+        "via": false,
+        "connected_polygon_refs": []
+      }
+    },
+    {
+      "layer": 200,
+      "datatype": 3,
+      "name": "layer_200",
+      "polygon_count": 0,
+      "shape_count": 4,
+      "via_count": 0,
+      "text_count": 4,
+      "area_um2": null,
+      "density_percent": null,
+      "semantic": {
+        "via": false,
+        "connected_polygon_refs": []
+      }
+    },
+    {
+      "layer": 201,
+      "datatype": 0,
+      "name": "VIA_M0_M1",
+      "polygon_count": 2,
+      "shape_count": 2,
+      "via_count": 2,
+      "text_count": 0,
+      "area_um2": null,
+      "density_percent": null,
+      "semantic": {
+        "via": true,
+        "connected_polygon_refs": [
+          "polygon_267",
+          "polygon_268",
+          "polygon_288"
+        ]
+      }
+    },
+    {
+      "layer": 202,
+      "datatype": 0,
+      "name": "M1",
+      "polygon_count": 1,
+      "shape_count": 1,
+      "via_count": 0,
+      "text_count": 0,
+      "area_um2": null,
+      "density_percent": null,
+      "semantic": {
+        "via": false,
+        "connected_polygon_refs": [
+          "polygon_267",
+          "polygon_268",
+          "polygon_282",
+          "polygon_283"
+        ]
+      }
+    },
+    {
+      "layer": 202,
+      "datatype": 2,
+      "name": "M1",
+      "polygon_count": 1,
+      "shape_count": 1,
+      "via_count": 0,
+      "text_count": 0,
+      "area_um2": null,
+      "density_percent": null,
+      "semantic": {
+        "via": false,
+        "connected_polygon_refs": [
+          "polygon_267",
+          "polygon_268",
+          "polygon_282",
+          "polygon_283"
+        ]
+      }
+    },
+    {
+      "layer": 202,
+      "datatype": 1,
+      "name": "layer_202",
+      "polygon_count": 0,
+      "shape_count": 1,
+      "via_count": 0,
+      "text_count": 1,
+      "area_um2": null,
+      "density_percent": null,
+      "semantic": {
+        "via": false,
+        "connected_polygon_refs": []
+      }
+    },
+    {
+      "layer": 202,
+      "datatype": 3,
+      "name": "layer_202",
+      "polygon_count": 0,
+      "shape_count": 1,
+      "via_count": 0,
+      "text_count": 1,
+      "area_um2": null,
+      "density_percent": null,
+      "semantic": {
+        "via": false,
+        "connected_polygon_refs": []
+      }
+    },
+    {
+      "layer": 220,
+      "datatype": 0,
+      "name": "HorizontalTracks",
+      "polygon_count": 4,
+      "shape_count": 4,
+      "via_count": 0,
+      "text_count": 0,
+      "area_um2": null,
+      "density_percent": null,
+      "semantic": {
+        "via": false,
+        "connected_polygon_refs": []
+      }
+    },
+    {
+      "layer": 221,
+      "datatype": 0,
+      "name": "VerticalTracks",
+      "polygon_count": 4,
+      "shape_count": 4,
+      "via_count": 0,
+      "text_count": 0,
+      "area_um2": null,
+      "density_percent": null,
+      "semantic": {
+        "via": false,
+        "connected_polygon_refs": []
+      }
+    },
+    {
+      "layer": 222,
+      "datatype": 0,
+      "name": "HorizontalTracks_M2",
+      "polygon_count": 3,
+      "shape_count": 3,
+      "via_count": 0,
+      "text_count": 0,
+      "area_um2": null,
+      "density_percent": null,
+      "semantic": {
+        "via": false,
+        "connected_polygon_refs": []
+      }
+    },
+    {
+      "layer": 300,
+      "datatype": 0,
+      "name": "BSPowerRail",
+      "polygon_count": 2,
+      "shape_count": 2,
+      "via_count": 0,
+      "text_count": 0,
+      "area_um2": null,
+      "density_percent": null,
+      "semantic": {
+        "via": false,
+        "connected_polygon_refs": [
+          "polygon_250",
+          "polygon_252",
+          "polygon_253",
+          "polygon_260",
+          "polygon_261",
+          "polygon_262"
+        ]
+      }
+    },
+    {
+      "layer": 300,
+      "datatype": 2,
+      "name": "BSPowerRail",
+      "polygon_count": 2,
+      "shape_count": 2,
+      "via_count": 0,
+      "text_count": 0,
+      "area_um2": null,
+      "density_percent": null,
+      "semantic": {
+        "via": false,
+        "connected_polygon_refs": [
+          "polygon_250",
+          "polygon_252",
+          "polygon_253",
+          "polygon_260",
+          "polygon_261",
+          "polygon_262"
+        ]
+      }
+    },
+    {
+      "layer": 300,
+      "datatype": 1,
+      "name": "layer_300",
+      "polygon_count": 0,
+      "shape_count": 2,
+      "via_count": 0,
+      "text_count": 2,
+      "area_um2": null,
+      "density_percent": null,
+      "semantic": {
+        "via": false,
+        "connected_polygon_refs": []
+      }
+    },
+    {
+      "layer": 300,
+      "datatype": 3,
+      "name": "layer_300",
+      "polygon_count": 0,
+      "shape_count": 2,
+      "via_count": 0,
+      "text_count": 2,
+      "area_um2": null,
+      "density_percent": null,
+      "semantic": {
+        "via": false,
+        "connected_polygon_refs": []
+      }
+    }
+  ],
+  "technology": {
+    "source": "user-provided semantic sidecar",
+    "semantic_sidecar_used": true,
+    "raw_version": 600,
+    "base_layout_name": "53/NR2D1/NR2D1_layouts//NR2D1_2_RT_4.gds"
+  }
+}

@@ -1,0 +1,17 @@
+# Dark by default, following the tools a layout engineer already has open all day:
+# Virtuoso, Innovus and KLayout are all dark. Jakob's Law - people expect a new
+# tool to behave like the ones they know - and there is a practical reason too:
+# bright layer colours separate far better against a dark canvas, which is exactly
+# what the difference map depends on.
+[theme]
+base = "dark"
+primaryColor = "#58a6ff"
+backgroundColor = "#0d1117"
+secondaryBackgroundColor = "#161b22"
+textColor = "#e6edf3"
+
+[server]
+maxUploadSize = 400
+
+[browser]
+gatherUsageStats = false
