@@ -442,6 +442,15 @@
 
       if (this.edit && this.buildEditToolbar) this.buildEditToolbar(t);
 
+      // Everything else, behind one button. The toolbar holds what gets used on
+      // every layout; a menu holds what gets used on some of them, and burying the
+      // rest in a section further down the page meant scrolling away from the
+      // drawing to reach a tool that is about the drawing.
+      const more = this.group(t, "");
+      this.btnMore = this.button(more, "More tools ▾",
+                                 "Every other tool (M)", () => this.toggleToolMenu(),
+                                 { cls: "gv-primary" });
+
       const out = this.group(t, "");
       this.button(out, ICON.save, "Save this view as a PNG", () => this.exportPNG());
       this.button(out, ICON.bookmark, "Bookmark this view", () => this.addBookmark());
@@ -511,6 +520,8 @@
       else if (this.tab === "nets") this.renderNetsTab();
       else if (this.tab === "cells") this.renderCellsTab();
       else if (this.tab === "diffs") this.renderDiffsTab();
+      else if (this.tab === "shapes") this.renderShapesTab();
+      else if (this.tab === "instances") this.renderInstancesTab();
       else if (this.tab === "edit" && this.renderEditTab) this.renderEditTab();
       else this.renderViewsTab();
       this.sync();
@@ -1053,6 +1064,219 @@
        // all" is already framing the whole set and needs only a margin.
       if (x1 > x0 || y1 > y0) {
         this.zoomToBoxPadded([x0, y0, x1, y1], regions.length === 1 ? 2.5 : 0.15);
+      }
+    }
+
+
+    // ---- the tool menu ----
+
+    // Two kinds of tool live here. Some act on the drawing and are already loaded,
+    // so they happen immediately. The rest run over the file in Python; those send
+    // a request to the page and it answers below the viewer. The menu says which is
+    // which rather than making everything look equally instant.
+    toolMenu() {
+      const here = [
+        ["layers", "Layers", "Show, hide, solo and recolour layers"],
+        ["markers", "Rule results", "Every design rule result, clickable"],
+        ["nets", "Nets", "Trace one net, or colour them all"],
+        ["cells", "Cell tree", "Placements, instance boxes, hierarchy depth"],
+        ["views", "Saved views", "Bookmarks, layer sets, share a view"],
+        ["shapes", "Browse shapes", "Every shape with its measurements"],
+        ["instances", "Browse instances", "Every placement with its transform"],
+      ];
+      const page = [
+        ["technology", "Technology", "What is loaded and what each input unlocks"],
+        ["drc", "DRC", "The bundled catalogue, or your own deck"],
+        ["lvs", "LVS", "Against a schematic netlist you supply"],
+        ["netlist", "Netlist", "Devices, nets and a SPICE export"],
+        ["stack3d", "2.5D view", "Needs a layer stack: elevation and thickness"],
+        ["density", "Density map", "Coverage per window"],
+        ["diff", "Diff", "Structural: cells, shapes, instances, texts"],
+        ["xor", "XOR", "Geometric difference between two layouts"],
+      ];
+      return { here, page };
+    }
+
+    toggleToolMenu() {
+      if (this.menuEl) { this.closeToolMenu(); return; }
+      const { here, page } = this.toolMenu();
+      const menu = document.createElement("div");
+      menu.className = "gv-menu";
+
+      const section = (title, note) => {
+        const head = document.createElement("div");
+        head.className = "gv-mhead";
+        head.innerHTML = `${title}<span class="gv-dim">${note}</span>`;
+        menu.appendChild(head);
+      };
+      const item = (id, label, hint, handler, enabled) => {
+        const row = document.createElement("button");
+        row.className = "gv-mitem";
+        row.type = "button";
+        row.dataset.tool = id;
+        row.disabled = enabled === false;
+        row.innerHTML = `<span>${label}</span><span class="gv-dim">${hint}</span>`;
+        row.addEventListener("click", () => { this.closeToolMenu(); handler(); });
+        menu.appendChild(row);
+      };
+
+      section("In the viewer", "instant");
+      for (const [id, label, hint] of here) {
+        item(id, label, hint, () => this.openViewerTool(id));
+      }
+      section("Runs on the file", this.opts.onEvent ? "opens below" : "open these from the app");
+      for (const [id, label, hint] of page) {
+        item(id, label, hint, () => this.requestTool(id), !!this.opts.onEvent);
+      }
+
+      this.canvas.parentElement.appendChild(menu);
+      this.menuEl = menu;
+      const rect = this.btnMore.getBoundingClientRect();
+      const host = this.canvas.parentElement.getBoundingClientRect();
+      menu.style.left = Math.max(6, Math.min(rect.left - host.left,
+                                             host.width - menu.offsetWidth - 8)) + "px";
+      menu.style.top = "6px";
+      this.btnMore.classList.add("gv-on");
+      // Clicking anywhere else closes it, which is what every other menu does.
+      this.menuAway = (event) => {
+        if (!menu.contains(event.target) && event.target !== this.btnMore) {
+          this.closeToolMenu();
+        }
+      };
+      setTimeout(() => document.addEventListener("pointerdown", this.menuAway), 0);
+    }
+
+    closeToolMenu() {
+      if (this.menuAway) document.removeEventListener("pointerdown", this.menuAway);
+      this.menuAway = null;
+      if (this.menuEl) this.menuEl.remove();
+      this.menuEl = null;
+      if (this.btnMore) this.btnMore.classList.remove("gv-on");
+    }
+
+    openViewerTool(id) {
+      if (id === "shapes" || id === "instances") {
+        this.tab = id;
+      } else {
+        this.tab = id;
+      }
+      this.renderPanel();
+      this.draw();
+    }
+
+    // A tool the page owns. The viewer cannot run it - it has geometry, not the
+    // file - so it asks, and says so if nothing is listening.
+    requestTool(id) {
+      if (!this.opts.onEvent) {
+        this.toast("This tool runs on the file. Open the layout from the app to use it.");
+        return;
+      }
+      this.opts.onEvent({ type: "tool", tool: id, nonce: Date.now() });
+      this.toast(`Opening ${id} below the viewer…`);
+    }
+
+    // ---- browse shapes and instances, in the viewer ----
+
+    renderShapesTab() {
+      const body = this.panelBody;
+      const bar = document.createElement("div");
+      bar.className = "gv-quick";
+      body.appendChild(bar);
+      this.button(bar, "Visible only", "Only the layers that are switched on", () => {
+        this.shapesVisibleOnly = !this.shapesVisibleOnly;
+        this.renderPanel();
+      });
+      const search = document.createElement("input");
+      search.type = "search";
+      search.className = "gv-search";
+      search.placeholder = "Filter by layer…";
+      search.value = this.shapesFilter || "";
+      search.addEventListener("input", () => {
+        this.shapesFilter = search.value.trim().toLowerCase();
+        this.renderPanel();
+      });
+      body.appendChild(search);
+
+      const list = document.createElement("div");
+      list.className = "gv-layers";
+      body.appendChild(list);
+
+      const rows = [];
+      for (const layer of this.A.layers) {
+        if (this.shapesVisibleOnly && !this.visible.has(layer.name)) continue;
+        if (this.shapesFilter && !layer.name.toLowerCase().includes(this.shapesFilter)) continue;
+        layer.shapes.forEach((shape, index) => {
+          if (!shape._del) rows.push({ layer: layer.name, index, shape });
+        });
+      }
+      rows.sort((a, b) => Math.min(a.shape.w, a.shape.h) - Math.min(b.shape.w, b.shape.h));
+
+      const head = document.createElement("div");
+      head.className = "gv-isec";
+      head.style.padding = "6px 8px 2px";
+      head.textContent = `${rows.length} shape(s), narrowest first`;
+      list.appendChild(head);
+
+      for (const row of rows.slice(0, 500)) {
+        const el = document.createElement("div");
+        el.className = "gv-mkr gv-net";
+        el.innerHTML =
+          `<span class="gv-mid">${row.layer.slice(0, 6)}</span>` +
+          `<span class="gv-mrule">${fmtLen(row.shape.w)} × ${fmtLen(row.shape.h)}</span>` +
+          `<span class="gv-mst">${fmtArea(row.shape.a)}</span>`;
+        el.title = `${row.layer} #${row.index}\n` +
+                   `origin ${fmtCoord(row.shape.x)}, ${fmtCoord(row.shape.y)} nm\n` +
+                   `${row.shape.v} vertices`;
+        el.addEventListener("click", () => {
+          this.selection = { layer: row.layer, shape: row.shape,
+                             ld: "", colour: (this.A.layers.find(
+                                 (l) => l.name === row.layer) || {}).colour };
+          this.zoomToBoxPadded([row.shape.x, row.shape.y,
+                                row.shape.x + row.shape.w, row.shape.y + row.shape.h], 2.5);
+          this.sync();
+          this.draw();
+        });
+        list.appendChild(el);
+      }
+      if (rows.length > 500) {
+        const note = document.createElement("div");
+        note.className = "gv-hint";
+        note.style.padding = "6px 8px";
+        note.textContent = `Showing the 500 narrowest of ${rows.length}. Filter by layer to see more.`;
+        list.appendChild(note);
+      }
+    }
+
+    renderInstancesTab() {
+      const body = this.panelBody;
+      const placements = (this.tree && this.tree.placements) || [];
+      if (!placements.length) {
+        body.innerHTML =
+          `<div class="gv-hint" style="padding:8px 10px">` +
+          `<b>${(this.tree && this.tree.top) || "This cell"}</b> is flat — it contains ` +
+          `no instances, so there is nothing to browse. Its shapes are under ` +
+          `<b>Browse shapes</b>.</div>`;
+        return;
+      }
+      const list = document.createElement("div");
+      list.className = "gv-layers";
+      body.appendChild(list);
+      const head = document.createElement("div");
+      head.className = "gv-isec";
+      head.style.padding = "6px 8px 2px";
+      head.textContent = `${placements.length} placement(s)`;
+      list.appendChild(head);
+      for (const placement of placements) {
+        const el = document.createElement("div");
+        el.className = "gv-mkr gv-cell";
+        el.style.paddingLeft = (6 + (placement.depth - 1) * 11) + "px";
+        el.innerHTML =
+          `<span class="gv-mid">L${placement.depth}</span>` +
+          `<span class="gv-mrule">${placement.cell}</span>` +
+          `<span class="gv-mst">${placement.orient || ""}</span>`;
+        el.title = `${placement.path}\nin ${placement.parent}`;
+        el.addEventListener("click", () => this.showPlacement(placement));
+        list.appendChild(el);
       }
     }
 
@@ -1904,6 +2128,7 @@
           l: () => { this.labelsOn = !this.labelsOn; this.sync(); this.draw(); },
           o: () => { this.fillOn = !this.fillOn; this.sync(); this.draw(); },
           t: () => { this.tracksOn = !this.tracksOn; this.sync(); this.draw(); },
+          m: () => this.toggleToolMenu(),
           h: () => { this.cellBoxesOn = !this.cellBoxesOn; this.renderPanel(); this.draw(); },
           "+": () => this.zoomBy(1.4), "=": () => this.zoomBy(1.4),
           "-": () => this.zoomBy(1 / 1.4), "_": () => this.zoomBy(1 / 1.4),
@@ -1957,6 +2182,7 @@
     }
 
     clearAnnotations() {
+      this.closeToolMenu();
       this.rulers = [];
       this.pending = null;
       this.selection = null;

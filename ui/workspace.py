@@ -43,7 +43,8 @@ def layout_panel(outlines: dict[str, Any], key: str, colours: dict[str, str],
                  hierarchy: dict[str, Any] | None = None,
                  tree: dict[str, Any] | None = None,
                  editable: dict[str, Any] | None = None,
-                 revision: int = 0) -> dict[str, Any] | None:
+                 revision: int = 0,
+                 interactive: bool = False) -> dict[str, Any] | None:
     """One layout in the interactive viewer.
 
     The analysis blocks are optional but change what the viewer is: with them, rule
@@ -69,6 +70,11 @@ def layout_panel(outlines: dict[str, Any], key: str, colours: dict[str, str],
                           help="Full-screen workspace with the chatbot beside the layout"):
             request_focus("layout", key=key, title=title)
             st.rerun()
+    if interactive:
+        # Mounted as a component so the viewer's tool menu can ask the page for a
+        # tool it cannot run itself. Everything else about it is unchanged: view
+        # decisions still never reach Python.
+        return mount_viewer(payload, height=height, key=key, revision=revision)
     render_viewer(payload, height=height, key=key)
     return None
 
@@ -95,13 +101,25 @@ def editor_panel(outlines: dict[str, Any], key: str, colours: dict[str, str],
 def compare_panel(xor: dict[str, Any], outlines_a: dict[str, Any],
                   outlines_b: dict[str, Any], colours: dict[str, str],
                   name_a: str, name_b: str, key: str = "cmp",
-                  height: int = 660, expandable: bool = True) -> None:
-    """Two layouts in one viewer, with the difference regions on top."""
-    payload = build_comparison(
-        xor,
-        build(outlines_a, fallback_colours=colours, title=name_a),
-        build(outlines_b, fallback_colours=colours, title=name_b),
-    )
+                  height: int = 660, expandable: bool = True,
+                  side_by_side: bool = True) -> None:
+    """The two layouts, A on the left and B on the right.
+
+    Side by side is the arrangement people actually compare in: two drawings at the
+    same size, each with its own zoom, pan and layer set, so scrolling one does not
+    move the other. They are separate mounts, which is what makes that independence
+    real rather than something to maintain.
+
+    The overlay - A+B, XOR, wipe and blink in one canvas - is the other half of the
+    job and is kept, one expander below. Neither replaces the other: side by side
+    answers "what do these two look like?", the overlay answers "where exactly do
+    they differ?".
+
+    Both are built from the outlines the page already read. Nothing is parsed twice.
+    """
+    a_payload = build(outlines_a, fallback_colours=colours, title=name_a)
+    b_payload = build(outlines_b, fallback_colours=colours, title=name_b)
+    payload = build_comparison(xor, a_payload, b_payload)
     payload["names"] = {"a": name_a, "b": name_b}
     payload["a"]["file"] = name_a
     payload["b"]["file"] = name_b
@@ -114,7 +132,23 @@ def compare_panel(xor: dict[str, Any], outlines_a: dict[str, Any],
                           help="Full-screen comparison with the chatbot beside it"):
             request_focus("compare", key=key, a=name_a, b=name_b)
             st.rerun()
-    render_viewer(payload, height=height, key=key)
+
+    if not side_by_side:
+        render_viewer(payload, height=height, key=key)
+        return
+
+    # Equal columns, so the two drawings are the same size and can be read against
+    # each other. Streamlit stacks columns itself when the viewport is too narrow.
+    left, right = st.columns(2, gap="small")
+    with left:
+        st.markdown(f"**A — Reference** · `{name_a}`")
+        render_viewer(a_payload, height=height, key=f"{key}_a")
+    with right:
+        st.markdown(f"**B — Revision** · `{name_b}`")
+        render_viewer(b_payload, height=height, key=f"{key}_b")
+
+    with st.expander("Overlay the two — A+B, XOR, wipe and blink in one view"):
+        render_viewer(payload, height=height, key=key)
 
 
 def workspace(request: dict[str, Any], render_view: Callable[[], None],

@@ -257,36 +257,42 @@ def test_the_expanded_comparison_opens_on_the_chosen_pair(run_app):
 
 # --- the tool bench ---------------------------------------------------------
 
+def _tool(at, name):
+    """Open one tool. Only the chosen one runs, so each test selects its own."""
+    return at.radio(key="tool_open").set_value(name).run()
+
+
 def test_the_tools_section_offers_every_tool(run_app):
     at = run_app(["AN2D1_2_RT_4.gds"])
-    labels = [t for tabs in at.tabs for t in [tabs.label] if t]
+    options = at.radio(key="tool_open").options
     for name in ("Technology", "DRC", "LVS", "Netlist", "2.5D view", "Density map",
                  "Diff", "Browse shapes", "Browse instances"):
-        assert name in labels, f"the {name} tool is missing"
+        assert name in options, f"the {name} tool is missing"
 
 
 def test_the_netlist_tool_extracts_devices_without_any_extra_input(run_app):
     """The stack is bundled, so the netlist is there the moment a file is uploaded."""
-    at = run_app(["AN2D1_2_RT_4.gds"])
+    at = _tool(run_app(["AN2D1_2_RT_4.gds"]), "Netlist")
     metrics = {m.label: m.value for m in at.metric}
     assert metrics.get("Devices") == "6"
     text = " ".join(m.value for m in at.markdown if m.value)
     assert "NMOS × 3" in " ".join(c.value for c in at.caption if c.value)
 
 
-def test_the_tools_that_need_an_input_say_which_one(run_app):
-    at = run_app(["AN2D1_2_RT_4.gds"])
+@pytest.mark.parametrize("tool,phrase,why", [
+    ("LVS", "This needs a schematic netlist", "no schematic in a GDSII"),
+    ("DRC", "This needs a design rule deck", "cannot be guessed"),
+    ("2.5D view", "This needs a layer stack", "GDSII stores no Z"),
+])
+def test_a_tool_that_needs_an_input_says_which_one_and_why(run_app, tool, phrase, why):
+    at = _tool(run_app(["AN2D1_2_RT_4.gds"]), tool)
     info = " ".join(i.value for i in at.info if i.value)
-    assert "This needs a schematic netlist" in info
-    assert "This needs a design rule deck" in info
-    assert "This needs a layer stack" in info
-    # ...and why, not just that.
-    assert "no schematic in a GDSII" in info
-    assert "GDSII stores no Z" in info
+    assert phrase in info
+    assert why in info
 
 
 def test_the_technology_tab_says_what_is_loaded(run_app):
-    at = run_app(["AN2D1_2_RT_4.gds"])
+    at = _tool(run_app(["AN2D1_2_RT_4.gds"]), "Technology")
     frames = [f.value for f in at.dataframe]
     tech = next((f for f in frames if "input" in getattr(f, "columns", [])), None)
     assert tech is not None, "the technology table is missing"
@@ -299,12 +305,54 @@ def test_the_technology_tab_says_what_is_loaded(run_app):
 
 
 def test_the_diff_tool_needs_two_different_layouts(run_app):
-    at = run_app(["AN2D1_2_RT_4.gds"])
+    at = _tool(run_app(["AN2D1_2_RT_4.gds"]), "Diff")
     info = " ".join(i.value for i in at.info if i.value)
     assert "Upload a second, different layout" in info
 
 
 def test_browse_instances_says_a_flat_cell_has_none(run_app):
-    at = run_app(["AN2D1_2_RT_4.gds"])
+    at = _tool(run_app(["AN2D1_2_RT_4.gds"]), "Browse instances")
     info = " ".join(i.value for i in at.info if i.value)
     assert "is flat" in info and "nothing to browse" in info
+
+
+# --- the comparison is side by side -----------------------------------------
+
+def test_the_comparison_shows_a_on_the_left_and_b_on_the_right(run_app):
+    at = run_app(["DCAP0_1_RT_4.gds", "DCAP0_2_RT_4.gds"])
+    labels = [m.value for m in at.markdown if m.value and "—" in m.value]
+    reference = next((l for l in labels if "A — Reference" in l), None)
+    revision = next((l for l in labels if "B — Revision" in l), None)
+    assert reference and revision, "the two viewers are not labelled A and B"
+    # A is rendered before B, which is what puts it on the left of the row.
+    order = [m.value for m in at.markdown if m.value]
+    assert order.index(reference) < order.index(revision)
+    # Each label carries its own filename.
+    assert "DCAP0_1_RT_4.gds" in reference
+    assert "DCAP0_2_RT_4.gds" in revision
+
+
+def test_identical_uploads_still_render_both_sides(run_app):
+    """Nothing differs, so the panel must still show two viewers rather than none."""
+    at = run_app(["DCAP0_1_RT_4.gds", "DCAP0_1_RT_4.gds"])
+    assert not at.exception
+    labels = [m.value for m in at.markdown if m.value]
+    assert any("A — Reference" in l for l in labels)
+    assert any("B — Revision" in l for l in labels)
+
+
+def test_the_overlay_is_kept_below_the_pair(run_app):
+    """Side by side answers one question; XOR and wipe answer the other."""
+    at = run_app(["DCAP0_1_RT_4.gds", "DCAP0_2_RT_4.gds"])
+    titles = [e.label for e in at.expander]
+    assert any("Overlay the two" in t for t in titles)
+
+
+def test_the_comparison_tables_are_unchanged(run_app):
+    """The arrangement changed; the comparison itself did not."""
+    at = run_app(["DCAP0_1_RT_4.gds", "DCAP0_2_RT_4.gds"])
+    metrics = {m.label: m.value for m in at.metric}
+    assert "Layers changed" in metrics
+    assert "XOR area" in metrics
+    assert "Regions" in metrics
+    assert any("Largest differences" in (m.value or "") for m in at.markdown)

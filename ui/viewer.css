@@ -489,3 +489,48 @@ kbd {
 /* An uncommitted change is drawn with a green edge on the canvas; the same green
    marks the panel so the two read as one state. */
 .gv-dirty { color: #7ee787; }
+
+/* ---- the tool menu ---- */
+
+.gv-menu {
+  position: absolute;
+  z-index: 12;
+  min-width: 268px;
+  max-height: calc(100% - 16px);
+  overflow-y: auto;
+  padding: 5px;
+  background: rgba(12, 18, 26, .985);
+  border: 1px solid #2b3a4a;
+  border-radius: 9px;
+  box-shadow: 0 12px 34px rgba(0, 0, 0, .55);
+}
+
+.gv-mhead {
+  display: flex;
+  justify-content: space-between;
+  padding: 7px 9px 4px;
+  font-size: 10px;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+  color: var(--gv-dim);
+}
+
+.gv-mitem {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  width: 100%;
+  padding: 6px 9px;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  color: var(--gv-text);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.gv-mitem:hover:not(:disabled) { background: #1b2735; }
+.gv-mitem:disabled { opacity: .4; cursor: default; }
+.gv-mitem .gv-dim { font-size: 10.5px; text-align: right; max-width: 150px; }

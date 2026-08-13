@@ -521,7 +521,7 @@ if len(metadata_list) == 2 and len(sources) > 1:
 
 
 def render_layout_view(outlines: dict, key: str, colours: dict, title: str = "",
-                       **analysis) -> None:
+                       **analysis) -> dict | None:
     """One layout in the interactive viewer.
 
     Replaces the Plotly figure with a canvas component. The change that matters is
@@ -531,7 +531,7 @@ def render_layout_view(outlines: dict, key: str, colours: dict, title: str = "",
     hover-revealed Plotly modebar sitting outside the plot's own hover region -
     disappeared as soon as the pointer moved toward it.
     """
-    layout_panel(outlines, key=key, colours=colours, title=title, **analysis)
+    return layout_panel(outlines, key=key, colours=colours, title=title, **analysis)
 
 def render_connectivity(conn: dict | None, idx: int) -> None:
     """The connectivity tab. Extracted so the per-layout panel stays readable."""
@@ -733,6 +733,36 @@ def _diff_against_upload(upload, edited: bytes) -> str | None:
             f"{um2(summary.get('total_area_added_um2') or 0, 4)} added")
 
 
+TOOL_TABS = ["Technology", "DRC", "LVS", "Netlist", "2.5D view", "Density map",
+             "Diff", "Browse shapes", "Browse instances"]
+TOOL_BY_ID = {"technology": "Technology", "drc": "DRC", "lvs": "LVS",
+              "netlist": "Netlist", "stack3d": "2.5D view", "density": "Density map",
+              "diff": "Diff", "xor": "Diff", "shapes": "Browse shapes",
+              "instances": "Browse instances"}
+
+
+def _handle_tool_event(event: dict | None) -> None:
+    """Open the tool the viewer's menu asked for.
+
+    The nonce guard matters here for the same reason it does for edits: a component
+    keeps returning its last value, so without it every rerun would re-open the tool
+    and the user could never leave it.
+    """
+    if not event or not isinstance(event, dict) or event.get("type") != "tool":
+        return
+    nonce = event.get("nonce")
+    if nonce is not None and st.session_state.get("tool_last_event") == nonce:
+        return
+    st.session_state["tool_last_event"] = nonce
+    wanted = TOOL_BY_ID.get(str(event.get("tool")))
+    if wanted:
+        # A separate key, not the radio's own. Streamlit refuses to let a widget's
+        # key be written after that widget has been created in the same run, and the
+        # viewer that raises this event is rendered below the selector.
+        st.session_state["tool_request"] = wanted
+        st.rerun()
+
+
 def _handle_edit_event(event: dict | None, upload, name: str) -> None:
     """Serve what the editor asked for: write the edits, or throw them away.
 
@@ -807,8 +837,11 @@ if _focus:
                     if _pair["a"] == _focus["a"] and _pair["b"] == _focus["b"]:
                         xor_detail = _pair.get("detail") or {}
                         break
+            # Side by side here too, at the height the workspace gives it. The
+            # chatbot takes the right-hand quarter, so the two viewers are narrower
+            # than on the page - but they are still equal, which is the point.
             compare_panel(xor_detail, oa, ob, _layer_colours, _focus["a"], _focus["b"],
-                          key="ws_cmp", height=760, expandable=False)
+                          key="ws_cmp", height=700, expandable=False)
         else:
             name = _focus.get("title") or uploads[0].name
             idx = _idx_of.get(name, 0)
@@ -938,10 +971,24 @@ _tool_idx = _idx_of.get(_tool_file, 0)
 _tool_bytes = file_bytes(uploads[_tool_idx])
 _tool_meta = metadata_list[_tool_idx]
 
-_tool_tabs = st.tabs(["Technology", "DRC", "LVS", "Netlist", "2.5D view",
-                      "Density map", "Diff", "Browse shapes", "Browse instances"])
+# A selector rather than st.tabs: the viewer's tool menu asks for a specific tool,
+# and a tab strip cannot be opened from code.
+_requested = st.session_state.pop("tool_request", None)
+if _requested in TOOL_TABS:
+    # Setting the widget's key *before* the widget exists is how a selection made
+    # elsewhere - here, the viewer's tool menu - becomes the one it opens on.
+    st.session_state["tool_open"] = _requested
+_open = st.session_state.get("tool_open") or TOOL_TABS[0]
+_chosen = st.radio("Tool", TOOL_TABS,
+                   index=TOOL_TABS.index(_open) if _open in TOOL_TABS else 0,
+                   horizontal=True, key="tool_open", label_visibility="collapsed")
 
-with _tool_tabs[0]:
+
+# Only the chosen tool's block runs. `st.tabs` renders every tab whether or not it
+# is open, which for tools that each read the layout means nine analyses per page
+# load; this way it is one.
+
+if _chosen == "Technology":
     st.markdown("**What is loaded, and what each input unlocks.**")
     toolbench.technology_panel({
         "layermap": {"loaded": bool(layermap),
@@ -966,7 +1013,7 @@ with _tool_tabs[0]:
                 "you replace it.")
     st.json(default_recipe(layermap, conn_stack or default_stack(layermap)))
 
-with _tool_tabs[1]:
+if _chosen == "DRC":
     st.markdown("**The bundled catalogue** — the rules transcribed from the design "
                 "rule manual in this repository.")
     _bundled_drc, _bundled_error = process_drc(_tool_bytes, _tool_file, layermap, conn_stack)
@@ -1001,7 +1048,7 @@ with _tool_tabs[1]:
             st.error(_deck_error)
     toolbench.deck_panel(_deck_result, _deck, lambda: None)
 
-with _tool_tabs[2]:
+if _chosen == "LVS":
     _schematic_upload = st.file_uploader(
         "Schematic netlist (SPICE / CDL)", type=["cir", "sp", "spice", "cdl", "net", "txt"],
         key="schematic_upload")
@@ -1021,7 +1068,7 @@ with _tool_tabs[2]:
         else:
             toolbench.lvs_panel(_lvs, lambda: None)
 
-with _tool_tabs[3]:
+if _chosen == "Netlist":
     _netlist, _netlist_error = process_netlist(
         _tool_bytes, _tool_file, layermap, conn_stack or default_stack(layermap),
         st.session_state.get("device_recipe"))
@@ -1030,7 +1077,7 @@ with _tool_tabs[3]:
     else:
         toolbench.netlist_panel(_netlist, Path(_tool_file).stem)
 
-with _tool_tabs[4]:
+if _chosen == "2.5D view":
     _stack3d_upload = st.file_uploader("Layer stack for the 2.5D view (.json)",
                                        type=["json"], key="stack3d_upload")
     if _stack3d_upload is not None:
@@ -1050,7 +1097,7 @@ with _tool_tabs[4]:
                                                      (_slabs or {}).get("height_nm", 0)),
                                     lambda: None)
 
-with _tool_tabs[5]:
+if _chosen == "Density map":
     _outlines_for_density, _ = process_outlines(_tool_bytes, _tool_file, layermap, conn_stack)
     _layer_names = [row["name"] for row in (_outlines_for_density or {}).get("layers", [])]
     _pick = st.multiselect("Layers", _layer_names,
@@ -1074,7 +1121,7 @@ with _tool_tabs[5]:
     else:
         st.info("Choose at least one layer.")
 
-with _tool_tabs[6]:
+if _chosen == "Diff":
     st.markdown("**Structural diff** — cells, shapes, instances and texts, compared "
                 "one for one. This is not the XOR.")
     # Uploading the same file twice gives two entries with one name, so the "other"
@@ -1095,7 +1142,7 @@ with _tool_tabs[6]:
         else:
             toolbench.diff_panel(_diff)
 
-with _tool_tabs[7]:
+if _chosen == "Browse shapes":
     _outlines_for_browse, _browse_error = process_outlines(
         _tool_bytes, _tool_file, layermap, conn_stack)
     if _browse_error:
@@ -1103,7 +1150,7 @@ with _tool_tabs[7]:
     else:
         toolbench.browse_shapes(_outlines_for_browse or {})
 
-with _tool_tabs[8]:
+if _chosen == "Browse instances":
     toolbench.browse_instances(process_tree(_tool_bytes, _tool_file))
 
 st.markdown(hint(
@@ -1327,12 +1374,15 @@ for idx, metadata in enumerate(metadata_list):
             if outline_error:
                 st.error(f"Could not read the geometry for drawing: {outline_error}")
             elif outlines:
-                render_layout_view(outlines, f"lv{idx}", _layer_colours,
-                                   title=uploads[idx].name,
-                                   drc=drc_for_view, connectivity=nets_for_view,
-                                   pitch=(cls or {}).get("pitch"),
-                                   hierarchy=hierarchy_for_view,
-                                   tree=tree_for_view)
+                _event = render_layout_view(
+                    outlines, f"lv{idx}", _layer_colours,
+                    title=uploads[idx].name,
+                    drc=drc_for_view, connectivity=nets_for_view,
+                    pitch=(cls or {}).get("pitch"),
+                    hierarchy=hierarchy_for_view,
+                    tree=tree_for_view,
+                    interactive=True)
+                _handle_tool_event(_event)
 
         with tabs[1]:
             drc, drc_error = process_drc(file_bytes(uploads[idx]), uploads[idx].name,
@@ -1487,9 +1537,22 @@ if len(uploads) >= 2:
         st.markdown(verdict_html(head["state"], head["headline"], head.get("detail", "")),
                     unsafe_allow_html=True)
 
+        # 2. The two layouts, side by side, whether or not they differ. Two
+        # identical files still have to be shown: "they are the same" is easier to
+        # believe with both drawings in front of you than with an empty section.
+        oa, ea = process_outlines(file_bytes(uploads[_idx_of[pair["a"]]]),
+                                  pair["a"], layermap, conn_stack)
+        ob, eb = process_outlines(file_bytes(uploads[_idx_of[pair["b"]]]),
+                                  pair["b"], layermap, conn_stack)
+        if ea or eb or not oa or not ob:
+            st.error(f"Could not read the geometry for drawing: {ea or eb}")
+        elif detail and detail.get("comparable"):
+            compare_panel(detail, oa, ob, _layer_colours,
+                          pair["a"], pair["b"], key="cmp")
+
         if detail and detail.get("comparable") and not detail["summary"]["identical"]:
             s = detail["summary"]
-            # 2. Four numbers, not fourteen.
+            # 3. Four numbers, not fourteen.
             c = st.columns(4)
             c[0].metric("Layers changed", f"{s['layers_changed']}/{s['layers_compared']}")
             c[1].metric("Regions", s["difference_regions"])
@@ -1498,27 +1561,14 @@ if len(uploads) >= 2:
             c[3].metric("Removed → Added",
                         f"{um2(s['total_area_removed_um2'], 3)} → {um2(s['total_area_added_um2'], 3)}")
 
-            # 3. The picture. This is what a reviewer actually reads.
             changed = sorted((x for x in detail["layers"] if not x["identical"]),
                              key=lambda r: -r["xor"]["area_um2"])
-            # Both layouts in one interactive view, with the differing regions
-            # drawn on top. The old figure could only show the regions - you
-            # could see *that* something changed but not what it sat in, so
-            # every finding meant opening KLayout to get the context back.
-            oa, ea = process_outlines(file_bytes(uploads[_idx_of[pair["a"]]]),
-                                      pair["a"], layermap, conn_stack)
-            ob, eb = process_outlines(file_bytes(uploads[_idx_of[pair["b"]]]),
-                                      pair["b"], layermap, conn_stack)
-            if ea or eb or not oa or not ob:
-                st.error(f"Could not read the geometry for drawing: {ea or eb}")
-            else:
-                compare_panel(detail, oa, ob, _layer_colours,
-                              pair["a"], pair["b"], key="cmp")
-                st.markdown(hint(
-                    "<b>A</b>/<b>B</b> show one layout, <b>A+B</b> overlays them, "
-                    "<b>XOR</b> leaves only the differences, and the wipe and blink "
-                    "tools compare them in place. Red is only in the first file, "
-                    "green only in the second."), unsafe_allow_html=True)
+            st.markdown(hint(
+                "<b>A</b> and <b>B</b> are side by side above, each with its own zoom, "
+                "pan and layers. In the overlay below them, <b>A+B</b> draws both, "
+                "<b>XOR</b> leaves only the differences, and the wipe and blink tools "
+                "compare them in place. Red is only in the first file, green only in "
+                "the second."), unsafe_allow_html=True)
 
             # 4. What to look at first, largest difference first.
             st.markdown(section("Largest differences — biggest first"),
