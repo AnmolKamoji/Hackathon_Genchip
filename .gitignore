@@ -18,3 +18,6 @@ uploads/
 # it are therefore excluded by default. Remove these lines only with permission.
 data/*.pdf
 data/genchip_drm_rules.json
+
+# Rendered images from tools/render.py. Regenerate rather than commit.
+build/

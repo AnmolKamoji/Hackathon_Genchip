@@ -254,6 +254,55 @@ unrelated pairs in `AN2D1_2_RT_4.gds` measure exactly 15 nm — the diffusion br
 poly and diffcon to BM0, because rule 3.1.6 ties the diffusion break to the poly
 width — so any of them could be dressed up as the missing CFET spacing. None is.
 
+## 25. Judging the answers
+
+The tool measures a layout and then talks about it, and those are two places a wrong
+number can appear. Section 24's parameters are checked against the tech file and the
+DRC engine; this section is about grading the *answers*, including the ones the
+Anthropic model writes.
+
+| Tool | What it does |
+|---|---|
+| `tools/oracle.py` | An independent fact sheet. Reads the layout with **gdstk** and parses the .lyp with a plain XML reader, importing nothing from `analyzer/` and not using KLayout at all. |
+| `tools/judge.py` | Grades answers against that fact sheet on three axes, and self-tests first. |
+| `tools/render.py` | Renders the layout to PNG through KLayout's own `LayoutView`, with the .lyp colours. |
+
+The independence is the point. An answer key built with the same library as the
+analyzer would confirm the analyzer's own mistakes, so the key comes from a second GDS
+reader with its own parser. When the two agree, two codebases that share no code agree.
+
+The judge grades three things separately, because they fail separately:
+
+1. **Correctness** — does the answer state the value the oracle measured? A fluent,
+   perfectly grounded answer can still be the answer to a different question.
+2. **Grounding** — is every number in the answer present in the metadata? Catches
+   figures derived, summed or unit-converted by the model.
+3. **Restraint** — does it avoid what a `.gds` and `.lyp` cannot support? No DRC
+   verdict, no short or open, no LVS result, no electrical intent, and no stated
+   tech-file figure passed off as a measurement.
+
+The restraint scan is negation-aware, because a correct refusal names the claim it is
+refusing. "I cannot say whether the layout is DRC clean" and "DRC clean status is
+unavailable" are refusals; "the layout is DRC clean, though I cannot check the timing"
+is an overclaim with an unrelated hedge attached. All three are pinned by tests.
+
+```
+python tools/judge.py                  # deterministic answers, no API cost
+python tools/judge.py --self-test      # only the negative controls
+python tools/judge.py --model --restraint-only --gds data/samples/AN2D1_2_RT_4.gds
+```
+
+`--model` costs API credit — one call per question per file — so it refuses a run over
+40 calls without `--yes` and prints the narrower commands instead.
+
+**Results.** 14 negative controls behave correctly, so the judge can fail things.
+Deterministic answers: **164/164 across all five samples**, 5 questions deferred to the
+model because no local branch claims them. Model answers on `AN2D1_2_RT_4.gds`:
+**28/28 correctness** against the independent oracle and **7/7 restraint**.
+
+An image is for sanity, not measurement — a pixel is about 0.15 nm at these zoom
+levels. A test asserts that no module in `analyzer/` reads one.
+
 ---
 
 ## Verification standard used
@@ -292,7 +341,15 @@ computation, never against the analyzer's own output:
   `AN2D1_2_RT_4.gds`: **26 of 26 comparable parameters agree, 0 disagree**. The
   figures were not produced by any code here, so the agreement is not a module
   confirming itself.
-- **685 automated tests**, including 33 that drive the real Streamlit app with the
+- Every measurement vs `tools/oracle.py`, an independent fact sheet built with
+  **gdstk** rather than KLayout and its own .lyp parser: **agreement on the tech
+  parameters, the gate pitch, all three metal pitches, the top cell and the polygon
+  count, on all five samples**.
+- Answers graded by `tools/judge.py` against that oracle on correctness, grounding and
+  restraint: **164/164 deterministic**, and **35/35 on the model path** for
+  `AN2D1_2_RT_4.gds`, with **14 negative controls** proving the judge fails wrong
+  answers rather than passing everything.
+- **717 automated tests**, including 33 that drive the real Streamlit app with the
   real sample files, and `verify_setup.py`'s 15 end-to-end checks.
 - Live model answers spot-checked against the fact-checker: the boundaries held
   under leading questions ("the vias overlap both M0 and M1, so VIA0 connects

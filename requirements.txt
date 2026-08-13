@@ -11,6 +11,12 @@ anthropic>=0.60
 # Test-only. `python -m pytest` is used in the setup walkthrough.
 pytest>=8
 
+# Verification-only. gdstk is a second, independent GDS reader, used by
+# tools/oracle.py to build the answer key that tools/judge.py grades against. It is
+# deliberately not KLayout: an answer key built with the same library as the analyzer
+# would confirm the analyzer's own mistakes. Nothing in app.py imports it.
+gdstk>=0.9
+
 # Optional legacy backend, used only when LLM_PROVIDER=openai. The local Ollama
 # fallback talks to its server over stdlib HTTP and needs no extra package.
 openai>=1.90,<2

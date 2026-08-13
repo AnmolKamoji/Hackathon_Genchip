@@ -730,6 +730,12 @@ def _sentence(text: str) -> str:
 # Dimensional tech-file parameters. Deliberately narrow, and tested before the
 # classification trigger, because "power rail width" would otherwise be swallowed by
 # the classifier's "power rail" pattern and answered with the power-delivery scheme.
+# A question about whether things are joined is not a question about their dimensions,
+# even when it names a via layer.
+CONNECTIVITY_WORDS = re.compile(
+    r"\bconnect\w*|\bshort\w*|\bopen\b|\bnets?\b|\bjoin\w*|\belectric\w*|"
+    r"\bcontinuity\b|\bshared\b|\btouch\w*")
+
 TECHPARAM_TRIGGER = re.compile(
     r"\bgate extension\b|\bdiffcon extension\b|\bvia extension\b|\bgate cut\b|"
     r"\b[np][-\s]?poly width\b|\b[np][-\s]?diffcon width\b|\bpoly width\b|"
@@ -1051,7 +1057,13 @@ def answer(metadata: dict[str, Any], question: str) -> str | None:
     # --- tech-file parameters, before the classification branch ---
     # "power rail width" is a dimension; the classifier's "power rail" pattern would
     # otherwise answer it with the power-delivery scheme.
-    if TECHPARAM_TRIGGER.search(q):
+    #
+    # Held back on connectivity questions. "The vias overlap M0 and M1, so VIA0
+    # connects them, correct?" matches the via pattern, and answering it with via0's
+    # size accepts the premise by ignoring it - the whole point of that question is
+    # that the conclusion does not follow. Note "interconnect" does not trip the
+    # connectivity guard: \b fails inside the word.
+    if TECHPARAM_TRIGGER.search(q) and not CONNECTIVITY_WORDS.search(q):
         reply = _techparam_answer(
             (metadata.get("classification") or {}).get("tech_parameters")
             or metadata.get("tech_parameters"), q)
