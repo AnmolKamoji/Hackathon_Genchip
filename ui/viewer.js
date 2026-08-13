@@ -437,6 +437,8 @@
       this.findCount.className = "gv-fcount";
       find.appendChild(this.findCount);
       this.button(find, ICON.fwd, "Next match (Enter)", () => this.stepFind(1));
+      this.button(find, "→▤", "Turn these hits into markers you can step through",
+                  () => this.findToMarkers());
 
       if (this.edit && this.buildEditToolbar) this.buildEditToolbar(t);
 
@@ -567,9 +569,19 @@
         });
         row.appendChild(box);
 
-        const sw = document.createElement("span");
+        // Edit Layer Stack: the swatch is a colour input. A .lyp gives every layer
+        // a colour, but two layers that matter to *this* review can easily share a
+        // near-identical one, and being able to change it beats squinting.
+        const sw = document.createElement("input");
+        sw.type = "color";
         sw.className = "gv-sw";
-        sw.style.background = layer.colour;
+        sw.value = /^#[0-9a-f]{6}$/i.test(layer.colour || "") ? layer.colour : "#8aa0b6";
+        sw.title = `${layer.name} colour — from the layer map, change it for this session`;
+        sw.addEventListener("input", () => {
+          layer.colour = sw.value;
+          this.draw();
+        });
+        sw.addEventListener("click", (e) => e.stopPropagation());
         row.appendChild(sw);
 
         const name = document.createElement("span");
@@ -677,7 +689,9 @@
       this.activeMarker = marker;
       this.visited.add(marker.id);
       this.tab = "markers";
-      if (marker.layers && marker.layers.length) {
+      if (marker.box) {
+        this.zoomToBoxPadded(marker.box, 2.5);
+      } else if (marker.layers && marker.layers.length) {
         const present = marker.layers.filter(
           (n) => this.A.layers.some((l) => l.name === n));
         if (present.length) {
@@ -731,7 +745,16 @@
       bar.className = "gv-quick";
       this.panelBody.appendChild(bar);
       this.button(bar, "Clear", "Stop highlighting", () => {
-        this.netHighlight = null; this.probeA = null; this.renderPanel(); this.draw();
+        this.netHighlight = null; this.probeA = null; this.allNets = false;
+        this.renderPanel(); this.draw();
+      });
+      // Trace All Nets: one colour per net, which answers "is this one net or two?"
+      // across the whole cell at once rather than one click at a time.
+      this.button(bar, "All", "Colour every net at once", () => {
+        this.allNets = !this.allNets;
+        this.netHighlight = null;
+        this.renderPanel();
+        this.draw();
       });
       const lock = document.createElement("label");
       lock.className = "gv-check";
@@ -873,6 +896,32 @@
       this.selection = hit;
       this.sync();
       this.draw();
+    }
+
+    // Shapes To Markers: the hits become rows in the same browser the rule results
+    // use, so a search and a check are reviewed the same way - stepped through,
+    // ticked off, and cross-probed to the geometry.
+    findToMarkers() {
+      if (!this.findHits.length) { this.toast("Nothing found to convert"); return; }
+      const query = this.findQuery || "find";
+      const made = this.findHits.map((hit, index) => ({
+        id: `find.${index + 1}`,
+        section: "search",
+        rule: `${hit.layer} matches ${query}`,
+        status: "not checked",
+        detail: `${fmtLen(hit.shape.w)} × ${fmtLen(hit.shape.h)}, area ${fmtArea(hit.shape.a)}`,
+        layers: [hit.layer],
+        observed: {"width_nm": +(hit.shape.w * 1000).toFixed(4),
+                   "height_nm": +(hit.shape.h * 1000).toFixed(4)},
+        box: [hit.shape.x, hit.shape.y, hit.shape.x + hit.shape.w, hit.shape.y + hit.shape.h],
+      }));
+      // Kept separate from the rule results: a search is not a check, and mixing
+      // them would let "12 markers" mean two different things.
+      this.markers = this.markers.filter((m) => m.section !== "search").concat(made);
+      this.visited = new Set([...this.visited].filter((id) => !String(id).startsWith("find.")));
+      this.tab = "markers";
+      this.buildPanel();
+      this.toast(`${made.length} hit(s) are now markers`);
     }
 
     drawFindHits(ctx) {
@@ -2013,6 +2062,7 @@
       if (this.compare && (cm === "xor" || cm === "overlay")) this.drawRegions(ctx);
 
       if (this.tracksOn) this.drawTracks(ctx);
+      if (this.allNets) this.drawAllNets(ctx);
       if (this.netHighlight) this.drawNet(ctx);
       if (this.cellBoxesOn || this.activePlacement) this.drawCellBoxes(ctx);
       if (this.findHits.length) this.drawFindHits(ctx);
@@ -2179,6 +2229,32 @@
         ctx.fill();
         ctx.stroke();
       }
+      ctx.restore();
+    }
+
+    // A colour per net, spread around the wheel so neighbours differ. Nets are
+    // sorted by size first, so the big power nets always take the same colours and
+    // the picture does not reshuffle when a layer is toggled.
+    drawAllNets(ctx) {
+      const nets = this.nets.slice().sort((a, b) => (b.shapeCount || 0) - (a.shapeCount || 0));
+      ctx.save();
+      ctx.lineWidth = 2;
+      nets.forEach((net, index) => {
+        const hue = (index * 137.508) % 360;      // golden angle: no two adjacent
+        ctx.strokeStyle = `hsl(${hue}, 85%, 62%)`;
+        ctx.fillStyle = `hsla(${hue}, 85%, 62%, 0.22)`;
+        for (const shape of net.shapes) {
+          if (!this.visible.has(shape.layer)) continue;
+          ctx.beginPath();
+          ctx.moveTo(this.sx(shape.o[0][0]), this.sy(shape.o[0][1]));
+          for (let i = 1; i < shape.o.length; i++) {
+            ctx.lineTo(this.sx(shape.o[i][0]), this.sy(shape.o[i][1]));
+          }
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+        }
+      });
       ctx.restore();
     }
 

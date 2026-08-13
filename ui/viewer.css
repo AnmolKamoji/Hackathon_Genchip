@@ -283,7 +283,20 @@ kbd {
 .gv-lrow.gv-soloed { background: rgba(88,166,255,.13); }
 .gv-lrow input[type=checkbox] { accent-color: var(--gv-accent); cursor: pointer; margin: 0; }
 
-.gv-sw { width: 11px; height: 11px; border-radius: 2px; border: 1px solid rgba(255,255,255,.28); }
+/* The swatch is an <input type=color>: same size as the old span, no browser chrome. */
+.gv-sw {
+  width: 11px;
+  height: 11px;
+  padding: 0;
+  border-radius: 2px;
+  border: 1px solid rgba(255,255,255,.28);
+  background: none;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+.gv-sw::-webkit-color-swatch-wrapper { padding: 0; }
+.gv-sw::-webkit-color-swatch { border: 0; border-radius: 1px; }
 .gv-lname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gv-ld { font: 10px ui-monospace, monospace; color: var(--gv-dim); }
 .gv-n { font: 10px ui-monospace, monospace; color: var(--gv-dim); min-width: 14px; text-align: right; }

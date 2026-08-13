@@ -1,0 +1,11 @@
+* AN2D1 - a two-input AND, drive strength 1.
+* A NAND2 followed by an inverter. Written by hand from the cell's function, not
+* extracted from the layout, so LVS against it is a real comparison.
+.SUBCKT AN2D1 A1 A2 Z VDD VSS
+MN1 mid  A2   VSS VSS NMOS L=0.015U W=0.015U
+MN2 nand A1   mid VSS NMOS L=0.015U W=0.015U
+MP1 nand A1   VDD VDD PMOS L=0.015U W=0.015U
+MP2 nand A2   VDD VDD PMOS L=0.015U W=0.015U
+MN3 Z    nand VSS VSS NMOS L=0.015U W=0.015U
+MP3 Z    nand VDD VDD PMOS L=0.015U W=0.015U
+.ENDS

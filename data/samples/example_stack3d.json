@@ -1,0 +1,78 @@
+{
+  "technology": "EXAMPLE - illustrative elevations, not a process stack",
+  "_comment": [
+    "GDSII stores no Z. These heights are made up to show the 2.5D view working;",
+    "they are ordered sensibly (diffusion, gate, local interconnect, M0, via, M1)",
+    "but the numbers are not any real process. Supply your own to see your stack."
+  ],
+  "layers": {
+    "NDIFF": {
+      "elevation_nm": 0,
+      "thickness_nm": 20
+    },
+    "PDIFF": {
+      "elevation_nm": 0,
+      "thickness_nm": 20
+    },
+    "NPOLY": {
+      "elevation_nm": 20,
+      "thickness_nm": 45
+    },
+    "PPOLY": {
+      "elevation_nm": 20,
+      "thickness_nm": 45
+    },
+    "NDIFFCON": {
+      "elevation_nm": 20,
+      "thickness_nm": 45
+    },
+    "PDIFFCON": {
+      "elevation_nm": 20,
+      "thickness_nm": 45
+    },
+    "N-VIAG": {
+      "elevation_nm": 65,
+      "thickness_nm": 15
+    },
+    "P-VIAG": {
+      "elevation_nm": 65,
+      "thickness_nm": 15
+    },
+    "N-VIAT": {
+      "elevation_nm": 65,
+      "thickness_nm": 15
+    },
+    "P-VIAT": {
+      "elevation_nm": 65,
+      "thickness_nm": 15
+    },
+    "M0": {
+      "elevation_nm": 80,
+      "thickness_nm": 25
+    },
+    "VIA0": {
+      "elevation_nm": 105,
+      "thickness_nm": 20
+    },
+    "M1": {
+      "elevation_nm": 125,
+      "thickness_nm": 30
+    },
+    "VIA1": {
+      "elevation_nm": 155,
+      "thickness_nm": 20
+    },
+    "M2": {
+      "elevation_nm": 175,
+      "thickness_nm": 30
+    },
+    "DVB": {
+      "elevation_nm": -40,
+      "thickness_nm": 40
+    },
+    "BM0": {
+      "elevation_nm": -80,
+      "thickness_nm": 40
+    }
+  }
+}

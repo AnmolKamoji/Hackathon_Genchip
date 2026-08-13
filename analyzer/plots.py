@@ -441,3 +441,83 @@ def layout_view(outlines: dict[str, Any], only_layers: set[str] | None = None,
         margin=dict(l=70, r=20, t=48, b=60))
     fig.update_yaxes(scaleanchor="x", scaleratio=1)
     return fig
+
+
+def density_heatmap(result: dict[str, Any], layer: str):
+    """The density map as a heat map over the cell.
+
+    One cell per window, coloured by coverage, with the actual percentage in the
+    hover - a picture for finding the hot corner and a number for quoting it.
+    """
+    import plotly.graph_objects as go
+
+    entry = (result.get("layers") or {}).get(layer)
+    if not entry or not entry.get("available", True) or not entry.get("tiles"):
+        return None
+    columns = entry["columns"]
+    rows = entry["rows"]
+    grid = [[None] * columns for _ in range(rows)]
+    for tile in entry["tiles"]:
+        grid[tile["row"]][tile["col"]] = tile["pct"]
+
+    first_row = [t for t in entry["tiles"] if t["row"] == 0]
+    xs = [round((t["box"][0] + t["box"][2]) / 2, 6) for t in sorted(first_row, key=lambda t: t["col"])]
+    first_col = [t for t in entry["tiles"] if t["col"] == 0]
+    ys = [round((t["box"][1] + t["box"][3]) / 2, 6) for t in sorted(first_col, key=lambda t: t["row"])]
+
+    figure = go.Figure(go.Heatmap(
+        z=grid, x=xs, y=ys, colorscale="Viridis", zmin=0,
+        colorbar=dict(title="coverage %"),
+        hovertemplate="x %{x:.4f} µm<br>y %{y:.4f} µm<br>%{z:.2f}%<extra></extra>",
+    ))
+    figure.update_layout(
+        title=f"{layer} coverage per {entry['window_nm']:g} nm window",
+        xaxis_title="x (µm)", yaxis_title="y (µm)", height=420,
+    )
+    figure.update_yaxes(scaleanchor="x", scaleratio=1)
+    return figure
+
+
+def stack_3d(meshes: list[dict[str, Any]], height_nm: float = 0):
+    """The 2.5D view: one mesh per slab, drawn in the layer's own colour.
+
+    The z axis is exaggerated relative to x and y on purpose - a 25 nm metal over a
+    240 nm cell is a film, and drawn to scale it is invisible. The axis is labelled
+    in nanometres so the exaggeration cannot be mistaken for a measurement.
+    """
+    import plotly.graph_objects as go
+
+    if not meshes:
+        return None
+    figure = go.Figure()
+    seen = set()
+    for entry in meshes:
+        vertices = entry["vertices"]
+        triangles = entry["triangles"]
+        figure.add_trace(go.Mesh3d(
+            x=[v[0] for v in vertices],
+            y=[v[1] for v in vertices],
+            z=[v[2] * 1000 for v in vertices],          # nanometres on the z axis
+            i=[t[0] for t in triangles],
+            j=[t[1] for t in triangles],
+            k=[t[2] for t in triangles],
+            color=entry["colour"],
+            opacity=0.92,
+            flatshading=True,
+            name=entry["layer"],
+            showlegend=entry["layer"] not in seen,
+            legendgroup=entry["layer"],
+            hovertemplate=f"{entry['layer']}<br>%{{z:.0f}} nm<extra></extra>",
+        ))
+        seen.add(entry["layer"])
+    figure.update_layout(
+        height=600,
+        scene=dict(
+            xaxis_title="x (µm)", yaxis_title="y (µm)", zaxis_title="z (nm)",
+            aspectmode="manual",
+            aspectratio=dict(x=2, y=2, z=1.1),
+        ),
+        margin=dict(l=0, r=0, t=30, b=0),
+        title="2.5D view — heights from the supplied stack file, not from the layout",
+    )
+    return figure

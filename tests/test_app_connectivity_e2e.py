@@ -253,3 +253,58 @@ def test_the_expanded_comparison_opens_on_the_chosen_pair(run_app):
     assert f'{focus["a"]} → {focus["b"]}' == chosen
     # The workspace owns the screen: the chat input beside the layout is present.
     assert at.chat_input
+
+
+# --- the tool bench ---------------------------------------------------------
+
+def test_the_tools_section_offers_every_tool(run_app):
+    at = run_app(["AN2D1_2_RT_4.gds"])
+    labels = [t for tabs in at.tabs for t in [tabs.label] if t]
+    for name in ("Technology", "DRC", "LVS", "Netlist", "2.5D view", "Density map",
+                 "Diff", "Browse shapes", "Browse instances"):
+        assert name in labels, f"the {name} tool is missing"
+
+
+def test_the_netlist_tool_extracts_devices_without_any_extra_input(run_app):
+    """The stack is bundled, so the netlist is there the moment a file is uploaded."""
+    at = run_app(["AN2D1_2_RT_4.gds"])
+    metrics = {m.label: m.value for m in at.metric}
+    assert metrics.get("Devices") == "6"
+    text = " ".join(m.value for m in at.markdown if m.value)
+    assert "NMOS × 3" in " ".join(c.value for c in at.caption if c.value)
+
+
+def test_the_tools_that_need_an_input_say_which_one(run_app):
+    at = run_app(["AN2D1_2_RT_4.gds"])
+    info = " ".join(i.value for i in at.info if i.value)
+    assert "This needs a schematic netlist" in info
+    assert "This needs a design rule deck" in info
+    assert "This needs a layer stack" in info
+    # ...and why, not just that.
+    assert "no schematic in a GDSII" in info
+    assert "GDSII stores no Z" in info
+
+
+def test_the_technology_tab_says_what_is_loaded(run_app):
+    at = run_app(["AN2D1_2_RT_4.gds"])
+    frames = [f.value for f in at.dataframe]
+    tech = next((f for f in frames if "input" in getattr(f, "columns", [])), None)
+    assert tech is not None, "the technology table is missing"
+    inputs = list(tech["input"])
+    assert "Connection stack (.json)" in inputs
+    assert "Schematic netlist (SPICE)" in inputs
+    loaded = dict(zip(tech["input"], tech["loaded"]))
+    assert loaded["Layer map (.lyp)"] == "yes"
+    assert loaded["Schematic netlist (SPICE)"] == "no"
+
+
+def test_the_diff_tool_needs_two_different_layouts(run_app):
+    at = run_app(["AN2D1_2_RT_4.gds"])
+    info = " ".join(i.value for i in at.info if i.value)
+    assert "Upload a second, different layout" in info
+
+
+def test_browse_instances_says_a_flat_cell_has_none(run_app):
+    at = run_app(["AN2D1_2_RT_4.gds"])
+    info = " ".join(i.value for i in at.info if i.value)
+    assert "is flat" in info and "nothing to browse" in info

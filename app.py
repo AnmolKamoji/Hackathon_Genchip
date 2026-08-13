@@ -14,10 +14,17 @@ from ai.llm import ask_llm, generate_comparison, generate_review, provider_statu
 from analyzer.comparison import compare_metadata
 from analyzer.classify import classify
 from analyzer.drc import check_layout, load_rules
+from analyzer.deck import load_deck, run as run_deck
+from analyzer.density import density_map
+from analyzer.diff import diff as structural_diff
 from analyzer.edit import EditError, apply_to_bytes, describe as describe_edits
+from analyzer.lvs import compare as lvs_compare
+from analyzer.netlist import default_recipe, extract as extract_netlist
+from analyzer.stack3d import build_slabs, load_stack3d, mesh as mesh_slabs
 from analyzer.edit import normalise as normalise_edits
-from analyzer.plots import (change_hotspot, density_profile, difference_grid,
-                            difference_map, layout_view, similarity_matrix)
+from analyzer.plots import (change_hotspot, density_heatmap, density_profile,
+                            difference_grid, difference_map, layout_view,
+                            similarity_matrix, stack_3d)
 from analyzer.present import findings, headline, nm, pct_of, split_primary, um2
 from analyzer.xor_diff import compare_many
 from analyzer.connectivity import (analyze_connectivity, default_stack, extract_nets,
@@ -33,6 +40,7 @@ from analyzer.techparams import (compare_to_reference, find_reference,
                                 load_reference, tech_parameters)
 from ui.theme import (CSS, chips, hint, section, style_figure, swatch,
                       verdict_html)
+from ui import tools as toolbench
 from ui.viewer_data import editable_payload
 from ui.workspace import (clear_focus, compare_panel, editor_panel,
                           focus_request, layout_panel, workspace)
@@ -302,6 +310,99 @@ def process_extras(gds_bytes: bytes, filename: str, layermap: dict | None, stack
         except Exception as exc:
             out["measurements"] = {"error": str(exc)}
         return out
+
+
+@st.cache_data(show_spinner="Extracting the netlist...")
+def process_netlist(gds_bytes: bytes, filename: str, layermap: dict | None,
+                    stack: dict | None, recipe: dict | None = None):
+    """Devices and nets. Needs the connection stack; says so when it is missing."""
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / filename
+        path.write_bytes(gds_bytes)
+        try:
+            return extract_netlist(path, layermap, stack, recipe=recipe), None
+        except Exception as exc:
+            return None, str(exc)
+
+
+@st.cache_data(show_spinner="Running LVS...")
+def process_lvs(gds_bytes: bytes, filename: str, layermap: dict | None,
+                stack: dict | None, schematic_bytes: bytes, schematic_name: str,
+                recipe: dict | None = None):
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / filename
+        path.write_bytes(gds_bytes)
+        schematic = Path(td) / (schematic_name or "schematic.cir")
+        schematic.write_bytes(schematic_bytes)
+        try:
+            return lvs_compare(path, layermap, stack, schematic, recipe=recipe), None
+        except Exception as exc:
+            return None, str(exc)
+
+
+@st.cache_data(show_spinner="Running the rule deck...")
+def process_deck(gds_bytes: bytes, filename: str, layermap: dict | None,
+                 deck_bytes: bytes, deck_name: str):
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / filename
+        path.write_bytes(gds_bytes)
+        deck_path = Path(td) / (deck_name or "deck.json")
+        deck_path.write_bytes(deck_bytes)
+        try:
+            deck = load_deck(deck_path)
+        except Exception as exc:
+            return None, None, f"the deck could not be read: {exc}"
+        try:
+            return run_deck(path, layermap, deck), deck, None
+        except Exception as exc:
+            return None, deck, str(exc)
+
+
+@st.cache_data(show_spinner="Measuring density...")
+def process_density(gds_bytes: bytes, filename: str, layermap: dict | None,
+                    layers: tuple[str, ...], window_nm: float, combine: bool):
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / filename
+        path.write_bytes(gds_bytes)
+        try:
+            return density_map(path, layermap, list(layers), window_nm, combine), None
+        except Exception as exc:
+            return None, str(exc)
+
+
+@st.cache_data(show_spinner="Building the 2.5D view...")
+def process_stack3d(gds_bytes: bytes, filename: str, layermap: dict | None,
+                    stack_bytes: bytes, stack_name: str):
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / filename
+        path.write_bytes(gds_bytes)
+        stack_path = Path(td) / (stack_name or "stack3d.json")
+        stack_path.write_bytes(stack_bytes)
+        try:
+            stack = load_stack3d(stack_path)
+        except Exception as exc:
+            return None, None, f"the stack file could not be read: {exc}"
+        try:
+            slabs = build_slabs(path, layermap, stack)
+            return slabs, mesh_slabs(slabs), None
+        except Exception as exc:
+            return None, None, str(exc)
+
+
+@st.cache_data(show_spinner="Comparing structure...")
+def process_diff(a_bytes: bytes, a_name: str, b_bytes: bytes, b_name: str,
+                 layermap: dict | None):
+    with tempfile.TemporaryDirectory() as td:
+        first = Path(td) / a_name
+        second = Path(td) / f"b_{b_name}"
+        first.write_bytes(a_bytes)
+        second.write_bytes(b_bytes)
+        try:
+            result = structural_diff(first, second, layermap)
+            result["a"], result["b"] = a_name, b_name
+            return result, None
+        except Exception as exc:
+            return None, str(exc)
 
 
 @st.cache_data(show_spinner=False)
@@ -822,6 +923,194 @@ if _focus:
                                    history=st.session_state.get("ws_chat", [])[-6:]),
               edit_bar=_edit_bar if _focus["kind"] == "layout" else None)
     st.stop()
+
+
+# --- the tool bench ----------------------------------------------------------
+# Everything KLayout puts under its Tools menu, in one place. A tool that needs an
+# input the layout cannot supply names the input and shows its format instead of
+# falling back on a guess.
+st.markdown(section("Tools"), unsafe_allow_html=True)
+
+_tool_names = [u.name for u in uploads]
+_tool_file = (st.selectbox("Layout to run these on", _tool_names, key="tool_file")
+              if len(_tool_names) > 1 else _tool_names[0])
+_tool_idx = _idx_of.get(_tool_file, 0)
+_tool_bytes = file_bytes(uploads[_tool_idx])
+_tool_meta = metadata_list[_tool_idx]
+
+_tool_tabs = st.tabs(["Technology", "DRC", "LVS", "Netlist", "2.5D view",
+                      "Density map", "Diff", "Browse shapes", "Browse instances"])
+
+with _tool_tabs[0]:
+    st.markdown("**What is loaded, and what each input unlocks.**")
+    toolbench.technology_panel({
+        "layermap": {"loaded": bool(layermap),
+                     "source": (lyp_upload.name if lyp_upload else
+                                "Titan_layer_properties.lyp (bundled)")},
+        "stack": {"loaded": bool(conn_stack),
+                  "source": (stack_upload.name if stack_upload
+                             else (default_stack(layermap) or {}).get("source", "bundled"))},
+        "recipe": {"loaded": bool(st.session_state.get("device_recipe")),
+                   "source": st.session_state.get("device_recipe_name") or
+                             "proposed from the layer map"},
+        "deck": {"loaded": bool(st.session_state.get("deck_file")),
+                 "source": st.session_state.get("deck_name") or "—"},
+        "schematic": {"loaded": bool(st.session_state.get("schematic_file")),
+                      "source": st.session_state.get("schematic_name") or "—"},
+        "stack3d": {"loaded": bool(st.session_state.get("stack3d_file")),
+                    "source": st.session_state.get("stack3d_name") or "—"},
+        "drm": {"loaded": bool(load_rules()),
+                "source": "data/genchip_drm_rules.json" if load_rules() else "not present"},
+    })
+    st.markdown("**The proposed device recipe** — what the netlist and LVS use unless "
+                "you replace it.")
+    st.json(default_recipe(layermap, conn_stack or default_stack(layermap)))
+
+with _tool_tabs[1]:
+    st.markdown("**The bundled catalogue** — the rules transcribed from the design "
+                "rule manual in this repository.")
+    _bundled_drc, _bundled_error = process_drc(_tool_bytes, _tool_file, layermap, conn_stack)
+    if _bundled_error:
+        st.error(_bundled_error)
+    elif _bundled_drc and _bundled_drc.get("available") is False:
+        st.info(f"**Unavailable.** {_bundled_drc['reason']}")
+    elif _bundled_drc:
+        _s = _bundled_drc["summary"]
+        _c = st.columns(4)
+        _c[0].metric("Rules checked", _s["rules_checked"])
+        _c[1].metric("Violations", _s["violation"])
+        _c[2].metric("Passed", _s["pass"])
+        _c[3].metric("Not checked", _s["not checked"])
+        st.caption(f"The manual has {_s['rules_in_manual']} rules; "
+                   f"{_s['rules_not_checked']} of them need information a .gds and "
+                   ".lyp do not carry.")
+    st.divider()
+    st.markdown("**Your own deck** — any technology, run with the same engine.")
+    _deck_upload = st.file_uploader("Design rule deck (.json)", type=["json"],
+                                    key="deck_upload")
+    if _deck_upload is not None:
+        st.session_state["deck_file"] = _deck_upload.getvalue()
+        st.session_state["deck_name"] = _deck_upload.name
+    _deck_bytes = st.session_state.get("deck_file")
+    _deck_result = _deck = None
+    if _deck_bytes:
+        _deck_result, _deck, _deck_error = process_deck(
+            _tool_bytes, _tool_file, layermap, _deck_bytes,
+            st.session_state.get("deck_name", "deck.json"))
+        if _deck_error:
+            st.error(_deck_error)
+    toolbench.deck_panel(_deck_result, _deck, lambda: None)
+
+with _tool_tabs[2]:
+    _schematic_upload = st.file_uploader(
+        "Schematic netlist (SPICE / CDL)", type=["cir", "sp", "spice", "cdl", "net", "txt"],
+        key="schematic_upload")
+    if _schematic_upload is not None:
+        st.session_state["schematic_file"] = _schematic_upload.getvalue()
+        st.session_state["schematic_name"] = _schematic_upload.name
+    _schematic_bytes = st.session_state.get("schematic_file")
+    if not _schematic_bytes:
+        toolbench.lvs_panel(None, lambda: None)
+    else:
+        _lvs, _lvs_error = process_lvs(
+            _tool_bytes, _tool_file, layermap, conn_stack or default_stack(layermap),
+            _schematic_bytes, st.session_state.get("schematic_name", "schematic.cir"),
+            st.session_state.get("device_recipe"))
+        if _lvs_error:
+            st.error(f"LVS could not run: {_lvs_error}")
+        else:
+            toolbench.lvs_panel(_lvs, lambda: None)
+
+with _tool_tabs[3]:
+    _netlist, _netlist_error = process_netlist(
+        _tool_bytes, _tool_file, layermap, conn_stack or default_stack(layermap),
+        st.session_state.get("device_recipe"))
+    if _netlist_error:
+        st.error(f"The netlist could not be extracted: {_netlist_error}")
+    else:
+        toolbench.netlist_panel(_netlist, Path(_tool_file).stem)
+
+with _tool_tabs[4]:
+    _stack3d_upload = st.file_uploader("Layer stack for the 2.5D view (.json)",
+                                       type=["json"], key="stack3d_upload")
+    if _stack3d_upload is not None:
+        st.session_state["stack3d_file"] = _stack3d_upload.getvalue()
+        st.session_state["stack3d_name"] = _stack3d_upload.name
+    _stack3d_bytes = st.session_state.get("stack3d_file")
+    if not _stack3d_bytes:
+        toolbench.stack3d_panel(None, None, lambda: None)
+    else:
+        _slabs, _meshes, _stack3d_error = process_stack3d(
+            _tool_bytes, _tool_file, layermap, _stack3d_bytes,
+            st.session_state.get("stack3d_name", "stack3d.json"))
+        if _stack3d_error:
+            st.error(_stack3d_error)
+        else:
+            toolbench.stack3d_panel(_slabs, stack_3d(_meshes or [],
+                                                     (_slabs or {}).get("height_nm", 0)),
+                                    lambda: None)
+
+with _tool_tabs[5]:
+    _outlines_for_density, _ = process_outlines(_tool_bytes, _tool_file, layermap, conn_stack)
+    _layer_names = [row["name"] for row in (_outlines_for_density or {}).get("layers", [])]
+    _pick = st.multiselect("Layers", _layer_names,
+                           default=[n for n in _layer_names if n in ("M0", "M1", "M2")][:3]
+                           or _layer_names[:2], key="density_layers")
+    _window = st.select_slider("Window", options=[25, 50, 100, 200, 500, 1000],
+                               value=100, format_func=lambda v: f"{v} nm",
+                               key="density_window")
+    _combine = st.checkbox("Combine the chosen layers into one map", key="density_combine")
+    if _pick:
+        _density, _density_error = process_density(
+            _tool_bytes, _tool_file, layermap, tuple(_pick), float(_window), _combine)
+        if _density_error:
+            st.error(_density_error)
+        elif _density:
+            _shown = list(_density["layers"])[0] if _density["layers"] else None
+            _which = st.selectbox("Map", list(_density["layers"]), key="density_shown") \
+                if len(_density["layers"]) > 1 else _shown
+            toolbench.density_panel(_density, density_heatmap(_density, _which)
+                                    if _which else None)
+    else:
+        st.info("Choose at least one layer.")
+
+with _tool_tabs[6]:
+    st.markdown("**Structural diff** — cells, shapes, instances and texts, compared "
+                "one for one. This is not the XOR.")
+    # Uploading the same file twice gives two entries with one name, so the "other"
+    # list can be empty even with two uploads. Selecting nothing then reads as a
+    # crash rather than as "there is nothing to compare".
+    _distinct = sorted(set(_tool_names))
+    if len(_distinct) < 2:
+        st.info("Upload a second, different layout to compare against.")
+    else:
+        _dcols = st.columns(2)
+        _da = _dcols[0].selectbox("A", _distinct, index=0, key="diff_a")
+        _others = [n for n in _distinct if n != _da]
+        _db = _dcols[1].selectbox("B", _others, index=0, key="diff_b")
+        _diff, _diff_error = process_diff(file_bytes(uploads[_idx_of[_da]]), _da,
+                                          file_bytes(uploads[_idx_of[_db]]), _db, layermap)
+        if _diff_error:
+            st.error(_diff_error)
+        else:
+            toolbench.diff_panel(_diff)
+
+with _tool_tabs[7]:
+    _outlines_for_browse, _browse_error = process_outlines(
+        _tool_bytes, _tool_file, layermap, conn_stack)
+    if _browse_error:
+        st.error(_browse_error)
+    else:
+        toolbench.browse_shapes(_outlines_for_browse or {})
+
+with _tool_tabs[8]:
+    toolbench.browse_instances(process_tree(_tool_bytes, _tool_file))
+
+st.markdown(hint(
+    "<b>Marker browser</b>, <b>trace net</b>, <b>trace all nets</b>, "
+    "<b>shapes to markers</b> and <b>edit layer stack</b> live inside the layout "
+    "viewer above - they act on the drawing, so they belong next to it."),
+    unsafe_allow_html=True)
 
 st.markdown(section("Per-layout detail"), unsafe_allow_html=True)
 

@@ -391,6 +391,50 @@ the one assertion that catches the two sides drifting apart.
 
 ---
 
+## 28. The tool bench
+
+Everything KLayout puts under its Tools menu, in one place, with one rule: a tool that
+needs an input the layout cannot supply **names the input and shows its format**
+rather than falling back on a guess.
+
+| KLayout tool | Here | What it needs |
+|---|---|---|
+| LVS | Device extraction and KLayout's own `NetlistComparer`, with the full cross-reference | a SPICE/CDL schematic |
+| DRC | The bundled DRM catalogue **plus** any deck you supply (11 rule types) | a deck, for anything but the bundled manual |
+| Netlist Browser | Devices with L, W, terminals and nets; SPICE export | nothing (uses the bundled stack) |
+| 2.5D View | Slabs per layer, meshed and drawn in 3D | a stack file: elevation and thickness per layer |
+| XOR Tool | The existing comparison, with tolerance binning | nothing |
+| Diff Tool | Structural: cells, shapes, instances and texts compared one for one | nothing |
+| Density Map | Per-window coverage, heat map, densest and sparsest windows | nothing |
+| Browse Shapes | Every shape with its measurements, filterable | nothing |
+| Browse Instances | Every placement with its transform | nothing |
+| Marker Browser | In the viewer: rule results as clickable, waivable markers | nothing |
+| Shapes To Markers | In the viewer: turns find hits into browsable markers | nothing |
+| Trace Net / Trace All Nets | In the viewer: click to trace, or colour every net at once | nothing |
+| Edit Layer Stack | In the viewer: per-layer colour, visibility and solo | nothing |
+| Manage Technologies | The Technology tab: what is loaded and what each input unlocks | nothing |
+
+**LVS is real LVS.** Devices are extracted with `DeviceExtractorMOS4Transistor` over
+`diffusion − gate` (raw diffusion shorts every device on a shared active area into
+one net), the connectivity comes from the stated stack, net names come from the
+technology's label layers, and the comparison is KLayout's own comparer. Against the
+bundled AND2 cell and a hand-written correct AND2 schematic, five of six devices pair
+up across completely different names and **the mismatch lands on the one net the
+layout does not connect** — the same defect the netlist extraction reports as a
+floating terminal, found independently.
+
+Two device parameters are compared (L and W, to 1%); AS, AD, PS and PD are ignored
+because they are measured off the layout and no schematic states them. The run says
+so rather than leaving it implied.
+
+**Sample inputs** are in `data/samples/`: `AN2D1.cir` (a correct AND2 schematic),
+`example_deck.json` (every rule type) and `example_stack3d.json` (elevations for the
+2.5D view). The last two are labelled EXAMPLE inside the files themselves — an
+illustrative elevation is exactly the sort of thing that should never be mistaken for
+process data.
+
+---
+
 ## Verification standard used
 
 Every numeric claim in this document was checked against a **separately written**
