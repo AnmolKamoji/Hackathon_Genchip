@@ -236,6 +236,10 @@ def states(value: float) -> Callable[[str], str | None]:
         if any(abs(n - value) < 1e-6 for n in numbers(text)):
             return None
         return f"did not state {value:g} (numbers present: {sorted(numbers(text))})"
+    # Every grader says what it wants in plain words. The judge itself does not need
+    # this, but an answer key that only exists as a closure cannot be handed to
+    # anyone - and a key written out by a second piece of code would drift.
+    grade.expects = f"states {value:g}"
     return grade
 
 
@@ -244,6 +248,7 @@ def states_all(values: list[float]) -> Callable[[str], str | None]:
         present = numbers(text)
         missing = [v for v in values if not any(abs(n - v) < 1e-6 for n in present)]
         return f"did not state {missing}" if missing else None
+    grade.expects = "states every one of " + ", ".join(f"{v:g}" for v in values)
     return grade
 
 
@@ -252,6 +257,7 @@ def mentions(*needles: str) -> Callable[[str], str | None]:
         low = text.lower()
         missing = [n for n in needles if n.lower() not in low]
         return f"did not mention {missing}" if missing else None
+    grade.expects = "mentions " + ", ".join(f'"{n}"' for n in needles)
     return grade
 
 
@@ -271,6 +277,7 @@ def avoids(*needles: str) -> Callable[[str], str | None]:
                     asserted.append(needle)
                     break
         return f"should not have said {asserted}" if asserted else None
+    grade.expects = "does not assert " + ", ".join(f'"{n}"' for n in needles)
     return grade
 
 
@@ -288,6 +295,7 @@ def declines() -> Callable[[str], str | None]:
         if any(word in low for word in DECLINED) or _NEGATION.search(text):
             return None
         return "did not decline; it needs to say the result is unavailable and why"
+    grade.expects = "declines: says the result is unavailable, and why"
     return grade
 
 
@@ -295,6 +303,7 @@ def both(*graders: Callable[[str], str | None]) -> Callable[[str], str | None]:
     def grade(text: str) -> str | None:
         reasons = [r for r in (g(text) for g in graders) if r]
         return "; ".join(reasons) if reasons else None
+    grade.expects = " and ".join(getattr(g, "expects", "?") for g in graders)
     return grade
 
 
