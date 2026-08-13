@@ -22,6 +22,7 @@ from analyzer.connectivity import (analyze_connectivity, default_stack, load_sta
                                    stack_from_sidecar)
 from analyzer.hierarchy import analyze_hierarchy
 from analyzer.measurements import measure_layers, measure_vias, shape_outlines
+from analyzer.pitch import analyze_pitch
 from analyzer.fused import analyze_pair
 from analyzer.gds_parser import analyze_gds
 from analyzer.layermap import default_layermap, load_lyp
@@ -159,7 +160,9 @@ def process_classification(gds_bytes: bytes, filename: str, layermap: dict | Non
         overrides = (stack or {}).get("role_overrides") or None
         try:
             outlines = shape_outlines(path, layermap, role_overrides=overrides)
-            return classify(outlines, path, list(all_names)), None
+            result = classify(outlines, path, list(all_names))
+            result["pitch"] = analyze_pitch(outlines, filename)
+            return result, None
         except Exception as exc:
             return None, str(exc)
 
@@ -771,6 +774,7 @@ for idx, metadata in enumerate(metadata_list):
             tuple(u.name for u in uploads))
         if cls:
             metadata["classification"] = cls
+            metadata["pitch"] = cls.get("pitch")
             st.markdown(f'<div class="verdict" style="--vc:#58a6ff">'
                         f'<div class="vtitle"><span class="vicon">◧</span>'
                         f'<span>{cls["headline"]}</span></div>'
@@ -788,9 +792,37 @@ for idx, metadata in enumerate(metadata_list):
             c[4].metric("M0 tracks",
                         f"{cls['routing_tracks'].get('tracks_used', '?')}"
                         f"/{cls['routing_tracks'].get('tracks', '?')}")
+            pitch = cls.get("pitch") or {}
+            gp = (pitch.get("gate_pitch") or {}).get("cpp_nm")
+            dims = pitch.get("cell_dimensions") or {}
+            mp = pitch.get("metal_pitches") or {}
+            if gp:
+                st.markdown(section("Pitch metrics"), unsafe_allow_html=True)
+                pc = st.columns(6)
+                pc[0].metric("Gate pitch (CPP)", f"{gp:g} nm",
+                             help="Also called CGP or the poly pitch — the poly-to-poly spacing.")
+                pc[1].metric("Cell width", f"{dims.get('gate_pitches', '?')} CPP",
+                             help=dims.get("width_basis", ""))
+                for slot, metal in zip(pc[2:5], ("M0", "M1", "M2")):
+                    entry = mp.get(metal) or {}
+                    slot.metric(f"{metal} pitch",
+                                f"{entry['pitch_nm']:g} nm" if entry.get("pitch_nm") else "n/a",
+                                help=entry.get("note") or entry.get("source") or "")
+                gear = (pitch.get("gear_ratio") or {}).get("gear_ratio")
+                pc[5].metric("Gear ratio", f"{gear:g}" if gear else "n/a",
+                             help="CPP / M1 pitch — the device grid against the routing grid.")
+                if dims.get("rt_in_filename") is not None:
+                    ok = dims.get("rt_matches_measured_tracks")
+                    st.markdown(hint(
+                        f"The filename declares RT {dims['rt_in_filename']} and "
+                        f"{dims.get('signal_tracks')} M0 signal tracks were measured — "
+                        + ("they agree." if ok else "<b>they disagree.</b>")),
+                        unsafe_allow_html=True)
+
             st.markdown(chips(
                 ("power · from GDS labels", "exact"),
                 ("technology · from diffusion geometry", "measured"),
+                ("pitches · from the track-guide layers", "measured"),
                 (f"orientation {cls['orientation'].get('orientation') or '?'} · "
                  f"{cls['orientation'].get('confidence')}", "inferred")),
                 unsafe_allow_html=True)

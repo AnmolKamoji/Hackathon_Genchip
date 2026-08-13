@@ -631,6 +631,88 @@ def _hierarchy_answer(hier: dict[str, Any] | None, q: str) -> str | None:
     return None
 
 
+PITCH_TRIGGER = re.compile(
+    r"\bcpp\b|\bcgp\b|\bgate pitch\w*|\bpoly pitch\w*|\bcontacted poly\b|"
+    r"\bmetal ?[012]\b.*\bpitch|\bpitch\b.*\bmetal ?[012]\b|\bm[012]\b.*\bpitch|"
+    r"\bpitch\b.*\bm[012]\b|\brouting pitch\w*|\bgear ratio\b|\bhow many (?:gate|poly) "
+    r"pitch|\bcell width\b|\bhow wide\b|\btrack height\b|\bpitch(?:es)?\b")
+
+
+def _pitch_answer(pitch: dict[str, Any] | None, q: str) -> str | None:
+    """Answer the pitch questions a layout engineer asks first.
+
+    These used to be answered with a description of how the shapes happened to be
+    arranged, which is not the same thing: a routing pitch is a property of the
+    track grid, and the grid exists whether or not a wire occupies it.
+    """
+    if not pitch:
+        return ("No pitch metrics are available for this file. They need the layer map, which "
+                "identifies the poly, diffcon and track-guide layers.")
+    if pitch.get("error"):
+        return f"Pitch analysis failed for this file: {pitch['error']}"
+
+    gp, metals, dims = pitch["gate_pitch"], pitch["metal_pitches"], pitch["cell_dimensions"]
+
+    # "How many gate pitches / poly pitches" is a count across the cell, not a value.
+    if re.search(r"\bhow many\b|\bcount\b|\bwide\b|\bcell width\b", q) and \
+            re.search(r"\bgate pitch\w*|\bpoly pitch\w*|\bcpp\b|\bwide\b|\bcell width\b", q):
+        if not dims.get("gate_pitches"):
+            return (f"The number of gate pitches could not be determined: "
+                    f"{dims.get('basis') or gp['basis']}")
+        note = "" if dims.get("width_is_whole_cpp") else \
+            " That is not a whole number, which is unusual for a standard cell."
+        return (f"**{dims['gate_pitches']} gate pitches.** {dims['width_basis']}."
+                f"{note} The gate pitch (CPP) itself is {gp['cpp_nm']:g} nm, so the cell is "
+                f"{dims['width_nm']:g} nm wide.")
+
+    if re.search(r"\bgear ratio\b", q):
+        gear = pitch.get("gear_ratio")
+        if not gear:
+            return ("The gear ratio needs both the gate pitch and the M1 pitch, and one of them "
+                    "could not be measured in this cell.")
+        return f"**Gear ratio {gear['gear_ratio']:g}.** {gear['basis']}."
+
+    # A question naming a metal layer wants the routing pitch of those layers.
+    named = [m for m in ("M0", "M1", "M2")
+             if re.search(rf"\b(?:metal ?{m[1]}|{m})\b", q, re.I)]
+    if named or re.search(r"\brouting pitch\w*|\bmetal pitch\w*", q):
+        wanted = named or ["M0", "M1", "M2"]
+        lines = []
+        for metal in wanted:
+            entry = metals.get(metal) or {}
+            if not entry.get("pitch_nm"):
+                lines.append(f"**{metal}**: no pitch measurable — {entry.get('note')}")
+                continue
+            piece = (f"**{metal}**: {entry['pitch_nm']:g} nm pitch "
+                     f"({entry['routing_direction']} routing, so measured along "
+                     f"{entry['pitch_axis']})")
+            if isinstance(entry.get("width_nm"), (int, float)):
+                piece += (f", {entry['width_nm']:g} nm wide leaving "
+                          f"{entry['implied_space_nm']:g} nm of space")
+            if entry.get("tracks"):
+                piece += f", {entry['tracks']} tracks"
+            if entry.get("note"):
+                piece += f". {_sentence(entry['note'])}"
+            lines.append(piece)
+        return (" · ".join(lines) + f" Taken from the track-guide layers, which declare the grid "
+                f"whether or not a wire uses it.")
+
+    # Otherwise: the gate pitch, which is what CPP/CGP/poly pitch all mean.
+    if not gp.get("cpp_nm"):
+        return f"The gate pitch could not be determined: {gp['basis']}"
+    out = [f"**Gate pitch (CPP) = {gp['cpp_nm']:g} nm.** {_sentence(gp['basis'])}."]
+    ev = gp["evidence"]
+    if ev.get("decomposition"):
+        out.append(f"It decomposes as {ev['decomposition']} nm "
+                   f"(2 × poly-to-diffcon spacing + diffcon width + poly width), which is the "
+                   f"manual's rule 3.2.6.")
+    if dims.get("gate_pitches"):
+        out.append(f"The cell is {dims['gate_pitches']} gate pitches wide "
+                   f"({dims['width_nm']:g} nm).")
+    out.append("CPP, CGP, gate pitch and poly pitch all name this one number.")
+    return " ".join(out)
+
+
 def _sentence(text: str) -> str:
     """Capitalise the first character only.
 
@@ -850,6 +932,12 @@ def answer(metadata: dict[str, Any], question: str) -> str | None:
             extra = (f" This file has {d_['top_cell_count']} top-level cells "
                      f"({', '.join(d_['top_cells'])}); only `{d_['top_cell']}` was analyzed.")
         return f"The top cell is `{d_['top_cell']}`.{extra}"
+
+    # --- pitch metrics, before the measurement branch claims "pitch" ---
+    if PITCH_TRIGGER.search(q):
+        reply = _pitch_answer(metadata.get("pitch"), q)
+        if reply:
+            return reply
 
     # --- cell classification, before the loose branches ---
     # "frontside or backside" and "how many tracks" must not fall through to a layer

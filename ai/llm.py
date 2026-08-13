@@ -361,6 +361,24 @@ def _digest(metadata: dict[str, Any], cap: int | None = None) -> dict[str, Any]:
     if conn and not conn.get("error"):
         out["connectivity"] = _slim_connectivity(conn)
 
+    # Pitch metrics: the numbers a layout engineer quotes first. Without these the
+    # model answered "what is the M0 pitch?" by describing how the shapes happened
+    # to be arranged, which is not a routing pitch at all.
+    pitch = metadata.get("pitch")
+    if pitch and not pitch.get("error"):
+        out["pitch_metrics"] = {
+            "headline": pitch.get("headline"),
+            "gate_pitch": pitch.get("gate_pitch"),
+            "metal_pitches": pitch.get("metal_pitches"),
+            "cell_dimensions": pitch.get("cell_dimensions"),
+            "gear_ratio": pitch.get("gear_ratio"),
+            "basis": pitch.get("basis"),
+            "not_derivable": pitch.get("not_derivable"),
+            "vocabulary": ("CPP, CGP, gate pitch and poly pitch all name the same number. "
+                           "'How many gate pitches' asks for cell_dimensions.gate_pitches, a "
+                           "count across the cell, not the pitch value."),
+        }
+
     # Cell classification. The tool used to answer "frontside or backside" with "the
     # metadata has no such field", which was true and useless - BM0's VSS/VDD labels
     # are the answer. These facts must reach the model.
@@ -490,7 +508,7 @@ def _dump(obj: Any) -> str:
 # a model without those will state an inferred net count as fact.
 _ESSENTIAL = ("schema_version", "metadata_source", "warnings", "source",
               "design", "layout", "technology", "consistency", "connectivity",
-              "design_rules", "cell_classification")
+              "design_rules", "cell_classification", "pitch_metrics")
 
 
 def _budget() -> int:
