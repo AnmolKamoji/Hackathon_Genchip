@@ -694,8 +694,12 @@ def _pitch_answer(pitch: dict[str, Any] | None, q: str) -> str | None:
             if entry.get("note"):
                 piece += f". {_sentence(entry['note'])}"
             lines.append(piece)
-        return (" · ".join(lines) + f" Taken from the track-guide layers, which declare the grid "
-                f"whether or not a wire uses it.")
+        # The note ends without punctuation, so the sentence that follows needs its
+        # own full stop or the two run together.
+        joined = " · ".join(lines)
+        return (joined + ("" if joined.endswith(".") else ".")
+                + " Taken from the track-guide layers, which declare the grid whether "
+                  "or not a wire uses it.")
 
     # Otherwise: the gate pitch, which is what CPP/CGP/poly pitch all mean.
     if not gp.get("cpp_nm"):
@@ -721,6 +725,101 @@ def _sentence(text: str) -> str:
     in the sentence is a proper noun here.
     """
     return text[:1].upper() + text[1:] if text else text
+
+
+# Dimensional tech-file parameters. Deliberately narrow, and tested before the
+# classification trigger, because "power rail width" would otherwise be swallowed by
+# the classifier's "power rail" pattern and answered with the power-delivery scheme.
+TECHPARAM_TRIGGER = re.compile(
+    r"\bgate extension\b|\bdiffcon extension\b|\bvia extension\b|\bgate cut\b|"
+    r"\b[np][-\s]?poly width\b|\b[np][-\s]?diffcon width\b|\bpoly width\b|"
+    r"\bdiffcon width\b|\bdiffusion width\b|\bpower rail width\b|"
+    r"\bdiffusion spacing\b|\bpoly to diffcon\b|\bdiffcon ete\b|\bete spacing\b|"
+    r"\bdiff(?:usion)? to diff interconnect\b|\bdiff interconnect\b|"
+    r"\benclosure\b|\bvia (?:size|offset)\b|\b[pn]?via[gt]\b|\bvia[01]\b|"
+    r"\bmetal ?[012]\b|\btech(?:nology)? file\b|\btech param\w*|\bparameter table\b|"
+    r"\bdiffcon profile\b|\btrack profile\b")
+
+
+def _fmt_param(value: Any) -> str:
+    """Render a tech-file parameter value the way a tech file prints it.
+
+    Deliberately not named `_fmt`: this module already has one with a different
+    signature, and shadowing it broke every caller of the original.
+    """
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, float):
+        return f"{value:g}"
+    if isinstance(value, list):
+        return ", ".join(_fmt_param(v) for v in value)
+    if isinstance(value, dict):
+        return ", ".join(f"{k} {_fmt_param(v)}" for k, v in value.items())
+    return str(value)
+
+
+def _techparam_answer(params: dict[str, Any] | None, q: str) -> str | None:
+    """Answer a question about a tech-file parameter by quoting the measurement.
+
+    The parameter is looked up by name, so "calculate the gate extension" is answered
+    with the figure measured from this layout rather than with a description of how
+    gate extensions work. Where the layout cannot express the parameter, the reason is
+    given and any stated value is attributed to the tech file - a stated figure is
+    never presented as a measurement.
+    """
+    if not params or not params.get("parameters"):
+        return ("No tech-file parameters were measured for this file. They need the "
+                "layer map, because the parameters are defined against named layers "
+                "(NPOLY, NDIFFCON, BM0) and a raw GDS only has layer numbers.")
+
+    from analyzer.techparams import parameter
+
+    # Strip the question framing so the parameter name is what gets matched.
+    needle = re.sub(r"\b(?:what|is|the|of|in|for|calculate|compute|measure|find|"
+                    r"give|me|show|please|tell|value|are|and|a|an|this|that|cell|"
+                    r"layout|gds|file|nm|how|much|many)\b", " ", q)
+    needle = re.sub(r"[?.,;:]|\b\w+\.gds\b", " ", needle).strip()
+    record = parameter(params, needle) if needle else None
+    if record is None:
+        names = ", ".join(list(params["parameters"])[:8])
+        return (f"That parameter is not one of the {len(params['parameters'])} measured "
+                f"here. The measured ones include: {names}.")
+
+    name, unit = record["parameter"], record.get("unit") or ""
+    suffix = f" {unit}" if unit else ""
+
+    if not record.get("available"):
+        stated = ((params.get("comparison") or {}).get("stated_only") or [])
+        quoted = next((row for row in stated if row["parameter"] == name), None)
+        text = (f"**{name}** cannot be measured from this layout: {record['basis']}.")
+        if quoted and quoted.get("stated") is not None:
+            text += (f" The supplied tech file states {_fmt_param(quoted['stated'])}{suffix}, "
+                     f"which is that file's figure and not a measurement of this cell.")
+        return text
+
+    value = record["value"]
+    text = f"**{name}: {_fmt_param(value)}{suffix}**"
+    if record.get("compact_nm") and isinstance(value, list):
+        text += (f" — as a repeating unit that is "
+                 f"{_fmt_param(record['compact_nm'])}{suffix} (margin, width, gap)")
+    text += f". {_sentence(record['basis'])}."
+
+    # A stated tech file is the strongest confirmation available, so say when the
+    # measurement agrees with it.
+    comparison = params.get("comparison") or {}
+    for row in comparison.get("agree") or []:
+        if row["parameter"] == name:
+            text += (f" This matches the {_fmt_param(row['stated'])}{suffix} stated in "
+                     f"`{comparison.get('reference_file')}`.")
+            break
+    else:
+        for row in comparison.get("disagree") or []:
+            if row["parameter"] == name:
+                text += (f" **The supplied tech file states "
+                         f"{_fmt_param(row['stated'])}{suffix}, which the geometry does not "
+                         f"agree with.**")
+                break
+    return text
 
 
 CLASSIFY_TRIGGER = re.compile(
@@ -769,11 +868,21 @@ def _classify_answer(cls: dict[str, Any] | None, q: str) -> str | None:
                     "UNKNOWN": "undetermined"}[m["metal_solution"]]
         if m["metal_solution"] == "UNKNOWN":
             return f"The routing capability is undetermined: {m['basis']}."
-        return (f"**{m['metal_solution']}** — a {readable} cell. "
-                f"{', '.join(m['metals_present'])} "
-                f"{'carries' if len(m['metals_present']) == 1 else 'carry'} geometry"
-                + (f"; M2 is absent." if "M2" not in m["metals_present"] else ".")
-                + " Three metal layers would be M0, M1 and M2 together.")
+        available, drawn = m.get("metals_available") or [], m.get("metals_drawn") or []
+        unused = [layer for layer in available if layer not in drawn]
+        # Capability and usage are different answers, and conflating them is how this
+        # once reported a three-metal cell as two-metal for routing on two layers.
+        detail = (f"{', '.join(available)} have track guides, so the technology gives "
+                  f"this cell {len(available)} routing layer(s)."
+                  if m.get("source") == "track guide"
+                  else f"No metal track guide was found, so this counts the drawn "
+                       f"metal instead: {', '.join(drawn) or 'none'}.")
+        usage = (f" {', '.join(drawn)} "
+                 f"{'carries' if len(drawn) == 1 else 'carry'} geometry here"
+                 + (f"; {', '.join(unused)} "
+                    f"{'is' if len(unused) == 1 else 'are'} available but unused."
+                    if unused else ".")) if drawn else ""
+        return f"**{m['metal_solution']}** — a {readable} cell. {detail}{usage}"
 
     if re.search(r"\bsingle[- ]?height\b|\bmulti[- ]?height\b|\bcell height\b", q):
         h, t = cls["cell_height"], cls["technology"]
@@ -936,6 +1045,16 @@ def answer(metadata: dict[str, Any], question: str) -> str | None:
     # --- pitch metrics, before the measurement branch claims "pitch" ---
     if PITCH_TRIGGER.search(q):
         reply = _pitch_answer(metadata.get("pitch"), q)
+        if reply:
+            return reply
+
+    # --- tech-file parameters, before the classification branch ---
+    # "power rail width" is a dimension; the classifier's "power rail" pattern would
+    # otherwise answer it with the power-delivery scheme.
+    if TECHPARAM_TRIGGER.search(q):
+        reply = _techparam_answer(
+            (metadata.get("classification") or {}).get("tech_parameters")
+            or metadata.get("tech_parameters"), q)
         if reply:
             return reply
 

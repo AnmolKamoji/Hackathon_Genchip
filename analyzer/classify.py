@@ -154,21 +154,49 @@ def technology(outlines: dict[str, Any], gds_path: str | Path | None = None) -> 
 
 
 def metal_solution(outlines: dict[str, Any]) -> dict[str, Any]:
-    """Single, two or three metal routing, from which metal layers carry geometry."""
+    """Single, two or three metal routing, from the metal track-guide layers.
+
+    This is a routing *capability*, so it is read from the track guides rather than
+    from the drawn wires. A cell that happens to route on M0 and M1 only is still a
+    three-metal cell if the technology gives it an M2 track guide - the third layer
+    is available whether or not this particular cell needed it. Counting drawn metal
+    instead would report the same standard cell differently depending on how busy it
+    is, which is not a property of the technology.
+
+    Drawn metal is still reported, because "M2 is available but unused" is worth
+    knowing and is a different statement from "M2 is available and used".
+    """
     by = _by_name(outlines)
-    present = [name for name in ("M0", "M1", "M2")
-               if (by.get(name) or {}).get("shape_count")]
-    if {"M0", "M1", "M2"} <= set(present):
+    metals = ("M0", "M1", "M2")
+    available = [name for name in metals
+                 if (by.get(f"{name}-TRACK-GUIDE") or {}).get("shape_count")]
+    drawn = [name for name in metals if (by.get(name) or {}).get("shape_count")]
+
+    # Without any track guide there is nothing declaring the capability, so fall back
+    # to the drawn metal and say so rather than reporting a guess as a technology fact.
+    basis_layers, source = (available, "track guide") if available else (drawn, "drawn geometry")
+    if {"M0", "M1", "M2"} <= set(basis_layers):
         result = "ThreeMetalSolution"
-    elif {"M0", "M1"} <= set(present):
+    elif {"M0", "M1"} <= set(basis_layers):
         result = "TwoMetalSolution"
-    elif "M0" in present:
+    elif "M0" in basis_layers:
         result = "SingleMetalSolution"
     else:
         result = "UNKNOWN"
-    return {"metal_solution": result, "metals_present": present,
-            "basis": (f"{', '.join(present)} carry geometry"
-                      if present else "no M0 geometry was found")}
+
+    if not basis_layers:
+        basis = "no metal track guide and no M0 geometry were found"
+    elif source == "track guide":
+        unused = [m for m in available if m not in drawn]
+        basis = (f"{', '.join(available)} have track guides, so the technology offers "
+                 f"{len(available)} routing layer(s)"
+                 + (f"; {', '.join(unused)} carry no geometry in this cell" if unused else ""))
+    else:
+        basis = (f"no metal track guide was found, so this counts the drawn metal "
+                 f"instead: {', '.join(drawn)}")
+    return {"metal_solution": result, "metals_available": available,
+            "metals_drawn": drawn, "metals_present": drawn, "source": source,
+            "basis": basis}
 
 
 def routing_tracks(outlines: dict[str, Any]) -> dict[str, Any]:

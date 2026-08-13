@@ -165,13 +165,45 @@ def test_missing_diffusion_gives_unknown_not_a_guess(lm, tmp_path):
 
 # --- metal solution ---------------------------------------------------------
 
-@pytest.mark.parametrize("gds,expected", [
-    ("DCAP0_1_RT_4.gds", "TwoMetalSolution"),      # M0 + M1
-    ("NR2D1_1_RT_4.gds", "SingleMetalSolution"),   # M0 only
-    ("NR2D1_2_RT_4.gds", "TwoMetalSolution"),
+@pytest.mark.parametrize("gds,drawn", [
+    ("DCAP0_1_RT_4.gds", ["M0", "M1"]),
+    ("NR2D1_1_RT_4.gds", ["M0"]),
+    ("NR2D1_2_RT_4.gds", ["M0", "M1"]),
+    ("AN2D1_2_RT_4.gds", ["M0", "M1"]),
 ])
-def test_metal_solution_counts_the_routing_layers(lm, gds, expected):
-    assert metal_solution(_outlines(gds, lm))["metal_solution"] == expected
+def test_metal_solution_reports_capability_not_usage(lm, gds, drawn):
+    """Routing capability comes from the track guides, not from the drawn wires.
+
+    Every one of these cells routes on one or two layers but has an M2 track guide, so
+    all are three-metal cells. Counting drawn metal instead reported the same
+    technology differently depending on how busy the cell was, which made a standard
+    cell's metal solution a function of its logic - and it contradicted the tech file
+    for AN2D1_2, which states Three Metal Solution while M2 carries no geometry.
+    """
+    result = metal_solution(_outlines(gds, lm))
+    assert result["metal_solution"] == "ThreeMetalSolution"
+    assert result["metals_available"] == ["M0", "M1", "M2"]
+    assert result["metals_drawn"] == drawn
+    assert result["source"] == "track guide"
+
+
+def test_metal_solution_falls_back_to_drawn_metal_without_guides(lm, tmp_path):
+    """With no track guide there is nothing declaring the capability.
+
+    Reporting three-metal anyway would be a guess dressed as a technology fact, so the
+    drawn metal is counted instead and the answer says that is what happened.
+    """
+    layout = db.Layout()
+    layout.dbu = 5e-05
+    cell = layout.create_cell("NOGUIDE")
+    for layer in (200, 202):                      # M0 and M1, no track guides
+        cell.shapes(layout.layer(layer, 0)).insert(db.Box(0, 0, 1000, 200))
+    path = tmp_path / "noguide.gds"
+    layout.write(str(path))
+    result = metal_solution(shape_outlines(path, lm))
+    assert result["metal_solution"] == "TwoMetalSolution"
+    assert result["source"] == "drawn geometry"
+    assert "no metal track guide" in result["basis"]
 
 
 def test_three_metal_and_unknown(lm, tmp_path):
@@ -299,7 +331,7 @@ def test_min_rt_number_from_filenames():
 
 def test_headline_summarises_the_cell(lm):
     cls = classify(_outlines("NR2D1_1_RT_4.gds", lm), SAMPLES / "NR2D1_1_RT_4.gds")
-    assert cls["headline"] == ("single-height GAA, backside power, single-metal routing, "
+    assert cls["headline"] == ("single-height GAA, backside power, three-metal routing, "
                               "4 M0 tracks (2 used)")
 
 
@@ -319,7 +351,7 @@ def test_the_question_that_used_to_fail_now_answers(lm):
 
 @pytest.mark.parametrize("question,expected", [
     ("Is this backside power?", "Backside power"),
-    ("What is the metal solution?", "SingleMetalSolution"),
+    ("What is the metal solution?", "ThreeMetalSolution"),
     ("Is it single or multi height?", "Single-Height GDS — GAA"),
     ("What is the orientation?", "R0"),
     ("How many routing tracks?", "4 M0 routing tracks"),
@@ -350,3 +382,17 @@ def test_layer_names_survive_the_prose(lm):
     assert "vdd" not in answer(meta, "frontside or backside")
     assert "m0 polygon" not in answer(meta, "How many routing tracks?")
     assert "M0 polygon" in answer(meta, "How many routing tracks?")
+
+
+def test_metal_solution_answer_separates_capability_from_usage(lm):
+    """The answer must not read as self-contradictory.
+
+    Reporting capability while describing usage in the old wording produced
+    "a three-metal cell. M0 carries geometry; M2 is absent", which states and denies
+    the same thing in one sentence.
+    """
+    reply = answer(_meta("NR2D1_1_RT_4.gds", lm), "What is the metal solution?")
+    assert "ThreeMetalSolution" in reply
+    assert "M0, M1, M2 have track guides" in reply
+    assert "available but unused" in reply
+    assert "is absent" not in reply

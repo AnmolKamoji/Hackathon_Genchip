@@ -62,3 +62,39 @@ def test_the_developers_env_does_not_reach_the_tests():
 
     leaked = {name: "set" for name in CONFIG_VARS if name in os.environ}
     assert not leaked, f"configuration leaked into the tests: {sorted(leaked)}"
+
+
+# --- the nanometre rule ------------------------------------------------------
+
+def test_the_nanometre_rule_catches_a_wrong_figure():
+    """Tech-file parameters are stated in nanometres, and no rule checked an nm claim
+    before, so "the gate extension is 13 nm" passed unexamined."""
+    from tools.claimcheck import Checker
+
+    meta = {"classification": {"tech_parameters": {"parameters": {
+        "Gate extension": {"value": 12.0, "unit": "nm"},
+        "Metal0": {"value": [15.0, 12.0, 9.0], "sequence_nm": [15.0, 12.0, 9.0]}}}}}
+    checker = Checker(meta)
+    assert checker.nanometres == {9.0, 12.0, 15.0}
+
+    _, bad = checker.audit("The gate extension is 12 nm.")
+    assert bad == []
+    _, bad = checker.audit("The gate extension is 13 nm.")
+    assert any("13" in b for b in bad), bad
+    _, bad = checker.audit("The profile starts with a 15 nm margin.")
+    assert bad == []
+    _, bad = checker.audit("The margin is 16 nm.")
+    assert any("16" in b for b in bad), bad
+
+
+def test_a_list_valued_pitch_field_is_admitted():
+    """`steps_nm` is a list. Admitting only scalars flagged the exception step that
+    the analyzer itself published in its own `note`, which is a faithful quotation."""
+    from tools.claimcheck import Checker
+
+    checker = Checker({"pitch": {"metal_pitches": {"M0": {
+        "pitch_nm": 21.0, "steps_nm": [21.0, 31.0],
+        "note": "2 of 3 steps are 21 nm; the exception(s) are 31 nm"}}}})
+    assert {21.0, 31.0} <= checker.nanometres
+    _, bad = checker.audit("2 of 3 steps are 21 nm; the exception is 31 nm.")
+    assert bad == [], bad

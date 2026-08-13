@@ -31,7 +31,12 @@ from ai.deterministic import answer, answer_comparison            # noqa: E402
 from ai.llm import ask_llm, generate_comparison, generate_review, looks_like_failure, provider_status  # noqa: E402
 from analyzer.comparison import compare_metadata                  # noqa: E402
 from analyzer.fused import analyze_pair                           # noqa: E402
+from analyzer.classify import classify                            # noqa: E402
 from analyzer.layermap import find_layermap, load_lyp             # noqa: E402
+from analyzer.measurements import shape_outlines                  # noqa: E402
+from analyzer.pitch import analyze_pitch                          # noqa: E402
+from analyzer.techparams import (compare_to_reference, find_reference,  # noqa: E402
+                                load_reference, tech_parameters)
 
 SAMPLES = ROOT / "data/samples"
 NUM = r"(?<![\w.])(-?\d[\d,]*(?:\.\d+)?(?:[eE][+-]?\d+)?)"
@@ -193,9 +198,59 @@ class Checker:
                                  c.get("child_instance_records"), c.get("levels_below")}
             self.shape_counts |= {c.get("shape_count")}
 
+        # Nanometre figures: the tech-file parameters and the pitch metrics. These are
+        # the only part of the metadata stated in nm, and no rule checked an nm claim
+        # before, so a wrong "the gate extension is 13 nm" passed unexamined.
+        self.nanometres: set = set()
+        cls_block = meta.get("classification") or {}
+        params = (cls_block.get("tech_parameters") or meta.get("tech_parameters") or {})
+        for record in (params.get("parameters") or {}).values():
+            for key in ("value", "compact_nm", "sequence_nm", "widths_nm", "gaps_nm"):
+                item = record.get(key)
+                if isinstance(item, (int, float)) and not isinstance(item, bool):
+                    self.nanometres.add(float(item))
+                elif isinstance(item, list):
+                    self.nanometres |= {float(v) for v in item
+                                        if isinstance(v, (int, float))}
+                elif isinstance(item, dict):
+                    for v in item.values():
+                        if isinstance(v, (int, float)) and not isinstance(v, bool):
+                            self.nanometres.add(float(v))
+                        elif isinstance(v, list):
+                            self.nanometres |= {float(x) for x in v
+                                                if isinstance(x, (int, float))}
+        pitch_block = cls_block.get("pitch") or meta.get("pitch") or {}
+        self.nanometres |= {v for v in [(pitch_block.get("gate_pitch") or {}).get("cpp_nm")]
+                            if isinstance(v, (int, float))}
+        for entry in (pitch_block.get("metal_pitches") or {}).values():
+            for key, value in (entry or {}).items():
+                if not key.endswith("_nm"):
+                    continue
+                # `steps_nm` and `positions_nm` are lists. Admitting only scalars
+                # flagged the exception step the analyzer itself published in `note`,
+                # so a faithful quotation was reported as invention.
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    self.nanometres.add(float(value))
+                elif isinstance(value, list):
+                    self.nanometres |= {float(v) for v in value
+                                        if isinstance(v, (int, float))}
+        dims = pitch_block.get("cell_dimensions") or {}
+        for key, value in dims.items():
+            if key.endswith("_nm") and isinstance(value, (int, float)):
+                self.nanometres.add(float(value))
+            elif key.endswith("_nm") and isinstance(value, list):
+                self.nanometres |= {float(v) for v in value
+                                    if isinstance(v, (int, float))}
+        # A nanometre figure is also derivable from a micron length, and the metadata
+        # states most dimensions in microns, so admit those too rather than flagging a
+        # correct unit conversion the analyzer itself published.
+        self.nanometres |= {round(float(v) * 1000, 4) for v in self.lengths
+                            if isinstance(v, (int, float))}
+
         for name in ("polygon_counts", "via_counts", "via_layer_counts", "text_counts",
                      "cell_counts", "layer_counts", "areas", "lengths", "densities",
-                     "shape_counts", "component_counts", "net_counts", "vertex_counts"):
+                     "shape_counts", "component_counts", "net_counts", "vertex_counts",
+                     "nanometres"):
             setattr(self, name, {v for v in getattr(self, name) if v is not None})
 
         # Per-name values, for attribution checking. A number can be a real
@@ -341,6 +396,7 @@ class Checker:
         (rf"{NUM}\s+cells?\b", "cell count", "cell_counts", False),
         (rf"{NUM}\s+layers?\b", "layer count", "layer_counts", False),
         (rf"{NUM}\s*(?:µm²|um2|um\^2|µm\^2|square microns?)", "area", "areas", True),
+        (rf"{NUM}\s*nm\b", "nanometre figure", "nanometres", True),
         (rf"{NUM}\s*(?:µm|um|microns?)\b(?!\s*²)", "length", "lengths", True),
         (rf"{NUM}\s*%", "density/percentage", "densities", True),
     ]
@@ -553,6 +609,22 @@ def main() -> int:
     lm = load_lyp(lyp) if lyp else None
     a = analyze_pair(SAMPLES / f"{args.stem}.gds", SAMPLES / f"{args.stem}.json", layermap=lm)
     b = analyze_pair(SAMPLES / f"{args.stem_b}.gds", SAMPLES / f"{args.stem_b}.json", layermap=lm)
+
+    # Attach the classification, pitch and tech-file parameters the app attaches, or
+    # the audit never sees the figures those features publish - and an unaudited
+    # feature is exactly where a fabricated number survives.
+    outlines = shape_outlines(SAMPLES / f"{args.stem}.gds", lm)
+    classification = classify(outlines, SAMPLES / f"{args.stem}.gds", [f"{args.stem}.gds"])
+    classification["pitch"] = analyze_pitch(outlines, f"{args.stem}.gds")
+    params = tech_parameters(SAMPLES / f"{args.stem}.gds", lm)
+    reference = find_reference(SAMPLES / f"{args.stem}.gds")
+    if reference:
+        stated = load_reference(reference)
+        params["reference"] = stated
+        params["comparison"] = compare_to_reference(params, stated)
+    classification["tech_parameters"] = params
+    a["classification"] = classification
+    a["pitch"] = classification["pitch"]
     comparison = compare_metadata(a, b)
     ca, cc = Checker(a), Checker(comparison)
 
@@ -600,6 +672,10 @@ def main() -> int:
         jobs = [
             ("Explain this layout to a non-expert.", lambda: ask_llm(a, "Explain this layout to a non-expert."), ca),
             ("Describe the via structure of this cell.", lambda: ask_llm(a, "Describe the via structure of this cell."), ca),
+            # The tech-file parameters are all in nanometres, and the nm rule is new,
+            # so the audit has to actually put a model answer through it.
+            ("What is the gate extension and the N-poly width?",
+             lambda: ask_llm(a, "What is the gate extension and the N-poly width?"), ca),
             ("AI design review", lambda: generate_review(a), ca),
             ("Comparison narrative", lambda: generate_comparison(comparison), cc),
         ]

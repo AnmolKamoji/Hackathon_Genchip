@@ -217,6 +217,43 @@ stack sources — the hand-transcribed file and the sidecar-derived one — prod
 | Report generation | **GDS + LYP** | Done |
 | Explicit statement of what is not derivable | — | Done — carried in the metadata itself so the model sees it |
 
+## 24. Tech-file parameters
+
+Every parameter a tech file states, recovered from the layout so the question
+"what is the gate extension in this cell?" is answered by measuring the cell.
+Each measurement implements the definition in the GENCHIP Design Rule Manual rule
+cited against it.
+
+| Feature | Availability | Status |
+|---|---|---|
+| Poly and diffcon widths (3.2.1, 3.3.1) | **GDS + LYP** | Done — measured orthogonal to the derived poly direction |
+| Diffusion width, power rail width (3.1.1, 3.12.1) | **GDS + LYP** | Done |
+| N/P diffusion, poly-to-diffcon, gate cut, diffcon ETE spacings | **GDS + LYP** | Done — facing pairs only; abutting pairs are not a spacing |
+| Gate and diffcon extension (3.2.2, 3.3.3) | **GDS + LYP** | Done — the *minimum* over every overlapping pair |
+| Metal0/1/2 track profiles | **GDS + LYP** | Done — a cross-section that sums to the cell dimension |
+| Via size, offset, enclosure, via extension (3.7.2, 3.9.2) | **GDS + LYP** | Done — extension recovered from the rule, not measured directly |
+| Technology, power delivery, routing capability, orientation, height, tracks | **GDS + LYP** | Done — from the cell classifier |
+| **Diffusion to Diff interconnect spacing** | **Requires a CFET layout** | Not measured — rule 3.13.5 is CFET-only and the layer is empty in GAA/FinFET |
+| Comparison against a stated tech file | **Optional `<stem>.techparams.json`** | Done — measured and stated are reported side by side; a stated figure is never presented as a measurement |
+
+Three readings this gets right that a naive one gets wrong:
+
+- **Gate extension** measures 20.5 nm on an uncut gate, because the poly runs on to
+  meet the poly of the opposite device. Only the cut column shows the real 12 nm, so
+  the minimum over every poly/diffusion pair is what "minimum extension" means.
+- **Gate cut spacing** exists only where the gate is actually cut. Three of the four
+  gates in `AN2D1_2_RT_4.gds` run straight through, and counting them as
+  zero-spacing pairs reports a gate cut spacing of 0 nm.
+- **Routing capability** comes from the track guides, not the drawn wires. `AN2D1_2`
+  routes on M0 and M1 only and is still a three-metal cell, exactly as its tech file
+  states. Counting drawn metal made a standard cell's metal solution a function of
+  how busy its logic was.
+
+Where a parameter cannot be measured, the reason is reported rather than a zero. Six
+unrelated pairs in `AN2D1_2_RT_4.gds` measure exactly 15 nm — the diffusion break and
+poly and diffcon to BM0, because rule 3.1.6 ties the diffusion break to the poly
+width — so any of them could be dressed up as the missing CFET spacing. None is.
+
 ---
 
 ## Verification standard used
@@ -240,7 +277,22 @@ computation, never against the analyzer's own output:
   figures rather than passing everything.
 - All 24 configurations validated against the metadata and connectivity schema
   contracts.
-- **281 automated tests**, including 10 that drive the real Streamlit app with the
+- Pitch metrics vs KLayout measured three other ways — centre-to-centre from
+  polygon extents, same-side edge-to-edge from `Region.edges()`, and
+  `space_check` + `width_check` — over 3 identical runs on every sample:
+  **CPP 45 nm confirmed by 6 to 12 independent measurements per file**, M0 21 nm,
+  M1 30 nm, M2 28 nm, cell width an exact whole multiple of CPP, and the M0 track
+  grid closing on the cell height.
+- Tech-file parameters vs KLayout's DRC engine (`width_check`,
+  `separation_check`, boolean subtraction for the extensions), 3 identical runs on
+  every sample: **11 to 12 parameters confirmed per file, 0 mismatches**, with rule
+  3.2.6 (2 x poly-to-diffcon + diffcon width + poly width) closing on the measured
+  45 nm gate pitch.
+- Tech-file parameters vs a tech file supplied independently of this repository for
+  `AN2D1_2_RT_4.gds`: **26 of 26 comparable parameters agree, 0 disagree**. The
+  figures were not produced by any code here, so the agreement is not a module
+  confirming itself.
+- **685 automated tests**, including 33 that drive the real Streamlit app with the
   real sample files, and `verify_setup.py`'s 15 end-to-end checks.
 - Live model answers spot-checked against the fact-checker: the boundaries held
   under leading questions ("the vias overlap both M0 and M1, so VIA0 connects

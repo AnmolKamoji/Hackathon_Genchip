@@ -27,6 +27,8 @@ from analyzer.fused import analyze_pair
 from analyzer.gds_parser import analyze_gds
 from analyzer.layermap import default_layermap, load_lyp
 from analyzer.sidecar_parser import analyze_sidecar
+from analyzer.techparams import (compare_to_reference, find_reference,
+                                load_reference, tech_parameters)
 from ui.theme import (CSS, chips, hint, section, style_figure, swatch,
                       verdict_html)
 
@@ -162,6 +164,18 @@ def process_classification(gds_bytes: bytes, filename: str, layermap: dict | Non
             outlines = shape_outlines(path, layermap, role_overrides=overrides)
             result = classify(outlines, path, list(all_names))
             result["pitch"] = analyze_pitch(outlines, filename)
+
+            # Tech-file parameters: widths, spacings, extensions and the metal track
+            # profiles, each measured to the definition in the design rule manual. A
+            # stated tech file beside the layout is compared against, never
+            # substituted for the measurement.
+            params = tech_parameters(path, layermap)
+            reference = find_reference(path)
+            if reference:
+                stated = load_reference(reference)
+                params["reference"] = stated
+                params["comparison"] = compare_to_reference(params, stated)
+            result["tech_parameters"] = params
             return result, None
         except Exception as exc:
             return None, str(exc)
@@ -819,10 +833,72 @@ for idx, metadata in enumerate(metadata_list):
                         + ("they agree." if ok else "<b>they disagree.</b>")),
                         unsafe_allow_html=True)
 
+            # --- tech-file parameters ---------------------------------------
+            params = cls.get("tech_parameters") or {}
+            if params.get("parameters"):
+                comparison = params.get("comparison") or {}
+                st.markdown(section("Tech file parameters"), unsafe_allow_html=True)
+                if comparison:
+                    st.markdown(hint(comparison.get("headline", "")),
+                                unsafe_allow_html=True)
+
+                stated_lookup = {row["parameter"]: row for row in
+                                 (comparison.get("agree") or [])
+                                 + (comparison.get("disagree") or [])
+                                 + (comparison.get("stated_only") or [])}
+                rows = []
+                for name, record in params["parameters"].items():
+                    value = record.get("value")
+                    if isinstance(value, list):
+                        shown = ", ".join(f"{v:g}" for v in value)
+                    elif isinstance(value, dict):
+                        shown = ", ".join(f"{k} {v}" for k, v in value.items())
+                    elif value is None:
+                        shown = "—"
+                    elif isinstance(value, bool):
+                        shown = "yes" if value else "no"
+                    elif isinstance(value, float):
+                        shown = f"{value:g}"
+                    else:
+                        shown = str(value)
+                    stated = stated_lookup.get(name) or {}
+                    against = stated.get("stated")
+                    # Agreement, disagreement and "stated but not measurable" are
+                    # three different situations and must not read the same.
+                    if against is None:
+                        verdict = ""
+                    elif not record.get("available"):
+                        verdict = "tech file only"
+                    elif any(r["parameter"] == name
+                             for r in comparison.get("disagree") or []):
+                        verdict = "DISAGREES"
+                    else:
+                        verdict = "matches"
+                    rows.append({
+                        "Parameter": name,
+                        "Measured": shown,
+                        "Unit": record.get("unit") or "",
+                        "Rule": record.get("drm_rule") or "",
+                        "vs tech file": verdict,
+                    })
+                st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+                st.markdown(hint(
+                    "Every figure is measured from this layout to the definition in the "
+                    "cited manual rule. A blank measurement is a parameter the geometry "
+                    "cannot express — the reason is given below, and a tech-file figure "
+                    "for it is that file's number, not a measurement of this cell."),
+                    unsafe_allow_html=True)
+                with st.expander("How each parameter was measured"):
+                    for name, record in params["parameters"].items():
+                        st.markdown(f"**{name}** (rule {record.get('drm_rule', '?')}) — "
+                                    f"{record.get('basis', '')}")
+
             st.markdown(chips(
                 ("power · from GDS labels", "exact"),
                 ("technology · from diffusion geometry", "measured"),
                 ("pitches · from the track-guide layers", "measured"),
+                (f"tech parameters · {params.get('measured_count', 0)} measured",
+                 "measured"),
                 (f"orientation {cls['orientation'].get('orientation') or '?'} · "
                  f"{cls['orientation'].get('confidence')}", "inferred")),
                 unsafe_allow_html=True)

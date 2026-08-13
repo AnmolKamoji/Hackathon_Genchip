@@ -400,6 +400,35 @@ def _digest(metadata: dict[str, Any], cap: int | None = None) -> dict[str, Any]:
             "min_rt_number": cls.get("min_rt_number"),
         }
 
+    # Tech-file parameters. Without these the model answered "what is the gate
+    # extension?" by explaining what a gate extension is, which is not the question.
+    params = (cls or {}).get("tech_parameters") or metadata.get("tech_parameters")
+    if params and params.get("parameters"):
+        comparison = params.get("comparison") or {}
+        out["tech_file_parameters"] = {
+            "poly_direction": params.get("poly_direction"),
+            "measured_count": params.get("measured_count"),
+            "unavailable_count": params.get("unavailable_count"),
+            "parameters": {
+                name: {k: v for k, v in record.items()
+                       if k in ("value", "unit", "available", "drm_rule", "basis",
+                                "compact_nm", "exceptions")}
+                for name, record in params["parameters"].items()},
+            "reference_comparison": ({
+                "reference_file": comparison.get("reference_file"),
+                "headline": comparison.get("headline"),
+                "disagree": comparison.get("disagree"),
+                "stated_only": comparison.get("stated_only"),
+            } if comparison else None),
+            "authority": (
+                "Each parameter is measured from this layout to the definition in the "
+                "cited GENCHIP Design Rule Manual rule. Quote `value` with `unit`. "
+                "Where `available` is false there is no measurement: give the `basis` "
+                "as the reason, and if a `stated_only` entry exists say the figure "
+                "comes from the supplied tech file rather than from this layout. "
+                "A stated figure is never a measurement of the cell."),
+        }
+
     # Design-rule results, with the manual's own wording for anything that failed
     # or was checked, so the model can cite a rule rather than paraphrase one.
     drc = metadata.get("drc")
@@ -508,7 +537,8 @@ def _dump(obj: Any) -> str:
 # a model without those will state an inferred net count as fact.
 _ESSENTIAL = ("schema_version", "metadata_source", "warnings", "source",
               "design", "layout", "technology", "consistency", "connectivity",
-              "design_rules", "cell_classification", "pitch_metrics")
+              "design_rules", "cell_classification", "pitch_metrics",
+              "tech_file_parameters")
 
 
 def _budget() -> int:

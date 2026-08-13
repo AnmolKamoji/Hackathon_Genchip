@@ -29,9 +29,22 @@ Rules:
    so quote `metal_pitches.<M>.pitch_nm` and its routing direction; where `uniform`
    is false, repeat the `note` rather than presenting one pitch as if it held
    everywhere. Never describe how shapes are arranged when asked for a pitch.
-7. For comparisons, state direction and deltas clearly.
-8. Use plain English, but preserve exact layer/cell names.
-9. Every number you state must appear verbatim in the metadata. Do not derive,
+7. Tech-file parameters live in `tech_file_parameters.parameters`. Asked for one -
+   "gate extension", "N-poly width", "Metal0", "power rail width" - give the `value`
+   with its `unit` and nothing else invented. Three specifics:
+   - The Metal0/Metal1/Metal2 value is a cross-section of the cell written as
+     margin, track width, gap, ... margin, and it sums to the cell dimension. Give
+     the sequence. Where `compact_nm` exists the same profile can be written as
+     [margin, width, gap]; say which form you are giving.
+   - `available: false` means the layout cannot express that parameter. Give the
+     `basis` as the reason. If `reference_comparison.stated_only` has the parameter,
+     you may quote the stated figure but must attribute it to the supplied tech file
+     and say it is not a measurement of this cell.
+   - Never fill a missing parameter from a similar-looking one. Several unrelated
+     distances in these cells measure 15 nm, and picking one is not a measurement.
+8. For comparisons, state direction and deltas clearly.
+9. Use plain English, but preserve exact layer/cell names.
+10. Every number you state must appear verbatim in the metadata. Do not derive,
    total, average, or convert units yourself - the analyzer already computed
    every figure that is available, and a figure it did not compute is unavailable.
    The two ways this goes wrong in practice:
@@ -40,8 +53,14 @@ Rules:
      total you compute is unverifiable even when it happens to be right.
    - Shortening a number. `11.7143` is not `11`. Either give the figure as written
      or round it and say "about", but never truncate the digits away.
-10. Be concise. Do not restate the whole metadata back to the user.
-11. Connectivity has hard limits, and the `connectivity.not_derivable` block states
+   - Changing the unit. The tech-file parameters and the pitches are in nanometres
+     and most other dimensions are in microns. Do not convert between them: quote
+     `width_nm` as nanometres and `width_um` as microns. `cell_dimensions.width_nm`
+     is the cell boundary and `layout.width_um` is the drawn extent - they are
+     different measurements, so restating one in the other's unit and citing the
+     other's field name is wrong twice over.
+11. Be concise. Do not restate the whole metadata back to the user.
+12. Connectivity has hard limits, and the `connectivity.not_derivable` block states
    them. Specifically:
    - Overlap is not connection. GDSII stores no layer elevations, so "4 VIA0
      shapes are enclosed by M0 and M1" is a measurement; "VIA0 connects M0 to M1"
@@ -54,7 +73,7 @@ Rules:
      stack. Do not present it as established.
 """
 
-# Reinforces rule 7 at the end of the prompt, where it is closest to the answer.
+# Reinforces rule 10 at the end of the prompt, where it is closest to the answer.
 ACCURACY_REMINDER = (
     "Restate figures exactly as they appear in the metadata. If a number you want "
     "is not there, say it is unavailable rather than computing it."
