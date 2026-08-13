@@ -996,3 +996,319 @@ def test_typing_a_query_does_not_trigger_the_shortcuts(page):
     page.locator(".gv-find").fill("a<300")
     page.wait_for_timeout(200)
     assert state(page, "v.mode") == mode
+
+
+# --- the editor -------------------------------------------------------------
+#
+# The editor's contract is that its preview equals what KLayout writes. These tests
+# drive the real tools and then check the journal they produce; the round-trip test
+# at the end applies that journal for real and compares the result polygon by
+# polygon, which is the only assertion that can catch the two sides drifting apart.
+
+@pytest.fixture(scope="module")
+def edit_doc():
+    from analyzer.techparams import tech_parameters
+    from ui.viewer_data import editable_payload, with_analysis
+
+    layermap = load_lyp(default_layermap())
+    outlines = shape_outlines(GDS, layermap, include_identity=True)
+    payload = with_analysis(
+        build(outlines, title="AN2D1"),
+        editable=editable_payload(outlines, layermap, tech_parameters(GDS, layermap)))
+    return document(payload, "gv")
+
+
+@pytest.fixture
+def epage(browser, edit_doc):
+    pg = browser.new_page(viewport={"width": 1400, "height": 800})
+    errors: list[str] = []
+    pg.on("pageerror", lambda e: errors.append(f"pageerror: {e}"))
+    pg.on("console", lambda m: errors.append(f"console.error: {m.text}")
+          if m.type == "error" else None)
+    pg.set_content(edit_doc)
+    pg.wait_for_function("() => window.GDSViewer && window.GDSViewer.instances.gv")
+    # Snapping to edges and tracks is right for a user and wrong for a test: it
+    # moves the pointer's coordinates by design, so a drag no longer asserts what
+    # it drew. Each test that needs exact coordinates turns them off.
+    pg.evaluate("""() => { const v = window.GDSViewer.instances.gv;
+      v.snapOn = false; v.editState.trackSnap = false; }""")
+    pg.wait_for_timeout(120)
+    yield pg
+    assert not errors, "\n".join(errors)
+    pg.close()
+
+
+def journal(page):
+    return page.evaluate("() => window.GDSViewer.instances.gv.buildJournal()")
+
+
+def test_the_editor_only_appears_when_the_layout_may_be_edited(page, epage):
+    assert state(page, "!!v.edit") is False
+    assert page.locator(".gv-tab", has_text="Edit").count() == 0
+    assert state(epage, "!!v.edit") is True
+    assert epage.locator(".gv-tab", has_text="Edit").count() == 1
+
+
+def test_only_the_technologys_own_layers_can_be_drawn_on(epage):
+    epage.locator(".gv-tab", has_text="Edit").click()
+    epage.wait_for_timeout(150)
+    options = epage.locator(".gv-erow select").first.locator("option").all_inner_texts()
+    assert "M0" in options and "NPOLY" in options
+    # A layer with no number cannot be written to a GDSII, so it is not offered.
+    assert all(not name.startswith("layer_") for name in options)
+
+
+def test_dragging_a_rectangle_creates_one_insert_at_the_drawn_size(epage):
+    epage.evaluate("""() => { const v = window.GDSViewer.instances.gv;
+      v.setMode('rect'); v.editState.layer = 'M2'; v.editState.gridNm = 1; }""")
+    box = epage.locator("canvas.gv-canvas").bounding_box()
+    epage.mouse.move(box["x"] + 380, box["y"] + 300)
+    epage.mouse.down()
+    epage.mouse.move(box["x"] + 480, box["y"] + 360, steps=6)
+    epage.mouse.up()
+    epage.wait_for_timeout(200)
+    ops = journal(epage)
+    assert len(ops) == 1
+    assert ops[0]["op"] == "insert" and ops[0]["layer"] == "M2"
+    assert len(ops[0]["points"]) == 4
+    drawn = state(epage, "v.selected[0].shape")
+    # Every vertex is on the chosen grid: 1 nm here, and that is what gets written.
+    for x, y in ops[0]["points"]:
+        assert abs(round(x * 1000) - x * 1000) < 1e-6
+        assert abs(round(y * 1000) - y * 1000) < 1e-6
+    assert drawn["w"] > 0 and drawn["h"] > 0
+
+
+def test_a_new_shape_is_marked_as_not_yet_written(epage):
+    epage.evaluate("""() => { const v = window.GDSViewer.instances.gv;
+      v.editState.layer = 'M2';
+      v.addShape('M2', [[0.2,0.2],[0.2,0.23],[0.24,0.23],[0.24,0.2]]); }""")
+    epage.wait_for_timeout(150)
+    assert state(epage, "v.A.layers.find(l=>l.name==='M2').shapes.some(s=>s._new)")
+    assert journal(epage)[0]["op"] == "insert"
+
+
+def test_moving_a_saved_shape_becomes_a_replace_naming_its_cell(epage):
+    epage.evaluate("""() => { const v = window.GDSViewer.instances.gv;
+      const row = v.A.layers.find(l => l.name === 'NPOLY');
+      v.selected = [{layer: 'NPOLY', shape: row.shapes[0]}];
+      v.moveSelection(0.01, 0, true); }""")
+    epage.wait_for_timeout(150)
+    ops = journal(epage)
+    assert [op["op"] for op in ops] == ["replace"]
+    target = ops[0]["target"]
+    assert target["cell"] == "AN2D1"
+    assert target["dup"] == 0
+    assert target["trans"] == "r0 *1 0,0"
+    # The identity is the *original* outline: that is what the file still holds.
+    assert all(isinstance(v, int) for point in target["local_dbu"] for v in point)
+
+
+def test_deleting_a_saved_shape_keeps_its_identity_for_the_journal(epage):
+    epage.evaluate("""() => { const v = window.GDSViewer.instances.gv;
+      const row = v.A.layers.find(l => l.name === 'NDIFFCON');
+      v.selected = [{layer: 'NDIFFCON', shape: row.shapes[0]}];
+      v.deleteSelection(); }""")
+    epage.wait_for_timeout(150)
+    ops = journal(epage)
+    assert [op["op"] for op in ops] == ["delete"]
+    assert ops[0]["target"]["cell"] == "AN2D1"
+    # It is gone from the drawing but still in the payload, or the delete could not
+    # be described to Python at all.
+    assert state(epage, "v.A.layers.find(l=>l.name==='NDIFFCON').shapes[0]._del") is True
+
+
+def test_undo_and_redo_walk_the_journal(epage):
+    epage.evaluate("""() => { const v = window.GDSViewer.instances.gv;
+      v.addShape('M2', [[0.3,0.3],[0.3,0.32],[0.34,0.32],[0.34,0.3]]); }""")
+    epage.wait_for_timeout(120)
+    assert len(journal(epage)) == 1
+    epage.evaluate("() => window.GDSViewer.instances.gv.editUndo()")
+    epage.wait_for_timeout(120)
+    assert journal(epage) == []
+    epage.evaluate("() => window.GDSViewer.instances.gv.editRedo()")
+    epage.wait_for_timeout(120)
+    assert len(journal(epage)) == 1
+
+
+def test_ten_moves_of_one_shape_are_one_replacement(epage):
+    """The journal is a state difference, not a recording of what was done."""
+    epage.evaluate("""() => { const v = window.GDSViewer.instances.gv;
+      const row = v.A.layers.find(l => l.name === 'NPOLY');
+      v.selected = [{layer: 'NPOLY', shape: row.shapes[0]}];
+      for (let i = 0; i < 10; i++) v.moveSelection(0.001, 0, true); }""")
+    epage.wait_for_timeout(200)
+    ops = journal(epage)
+    assert len(ops) == 1 and ops[0]["op"] == "replace"
+
+
+def test_a_shape_drawn_and_then_deleted_leaves_nothing_to_apply(epage):
+    epage.evaluate("""() => { const v = window.GDSViewer.instances.gv;
+      const shape = v.addShape('M2', [[0.4,0.4],[0.4,0.42],[0.44,0.42],[0.44,0.4]]);
+      v.selected = [{layer: 'M2', shape: shape}];
+      v.deleteSelection(); }""")
+    epage.wait_for_timeout(150)
+    assert journal(epage) == []
+
+
+def test_delete_needs_a_selection_and_says_so(epage):
+    epage.evaluate("() => { const v = window.GDSViewer.instances.gv; v.setMode('edit'); v.selected = []; }")
+    epage.locator("canvas.gv-canvas").click(position={"x": 5, "y": 5})
+    epage.keyboard.press("Delete")
+    epage.wait_for_timeout(150)
+    assert journal(epage) == []
+    assert "Nothing selected" in epage.locator(".gv-toast").inner_text()
+
+
+def test_a_vertex_handle_reshapes_the_selected_shape(epage):
+    epage.evaluate("""() => { const v = window.GDSViewer.instances.gv;
+      v.setMode('edit');
+      const row = v.A.layers.find(l => l.name === 'M0');
+      v.selected = [{layer: 'M0', shape: row.shapes[0]}];
+      v.buildHandles(); }""")
+    epage.wait_for_timeout(120)
+    assert state(epage, "v.editState.handles.length") >= 4
+    before = state(epage, "v.selected[0].shape.o.map(p => p.join(','))")
+    handle = epage.evaluate("""() => { const v = window.GDSViewer.instances.gv;
+      const h = v.editState.handles[0];
+      const c = document.querySelector('canvas.gv-canvas').getBoundingClientRect();
+      return {px: c.left + v.sx(h.x), py: c.top + v.sy(h.y)}; }""")
+    epage.mouse.move(handle["px"], handle["py"])
+    epage.mouse.down()
+    epage.mouse.move(handle["px"] + 30, handle["py"] - 20, steps=5)
+    epage.mouse.up()
+    epage.wait_for_timeout(200)
+    ops = journal(epage)
+    assert [op["op"] for op in ops] == ["replace"]
+    # A rectangle's corner can move without changing the bounding box, so the
+    # outline is what has to differ - and it still has four points.
+    after = state(epage, "v.selected[0].shape.o.map(p => p.join(','))")
+    assert after != before
+    assert len(after) == 4
+    assert sum(1 for a, b in zip(after, before) if a != b) == 1
+
+
+def test_rotation_keeps_the_shape_on_its_own_centre(epage):
+    epage.evaluate("""() => { const v = window.GDSViewer.instances.gv;
+      const row = v.A.layers.find(l => l.name === 'NPOLY');
+      v.selected = [{layer: 'NPOLY', shape: row.shapes[0]}]; }""")
+    before = state(epage, "({w: v.selected[0].shape.w, h: v.selected[0].shape.h, "
+                          "cx: v.selected[0].shape.cx, cy: v.selected[0].shape.cy})")
+    epage.evaluate("() => window.GDSViewer.instances.gv.transformSelection(90, false)")
+    epage.wait_for_timeout(150)
+    after = state(epage, "({w: v.selected[0].shape.w, h: v.selected[0].shape.h, "
+                         "cx: v.selected[0].shape.cx, cy: v.selected[0].shape.cy})")
+    assert abs(after["w"] - before["h"]) < 1e-6
+    assert abs(after["h"] - before["w"]) < 1e-6
+    assert abs(after["cx"] - before["cx"]) < 1e-6
+    assert abs(after["cy"] - before["cy"]) < 1e-6
+
+
+def test_a_rubber_band_selects_what_it_encloses(epage):
+    epage.evaluate("() => { const v = window.GDSViewer.instances.gv; v.setMode('edit'); v.fit(); }")
+    epage.wait_for_timeout(150)
+    box = epage.locator("canvas.gv-canvas").bounding_box()
+    epage.mouse.move(box["x"] + 60, box["y"] + 60)
+    epage.mouse.down()
+    epage.mouse.move(box["x"] + 700, box["y"] + 600, steps=8)
+    epage.mouse.up()
+    epage.wait_for_timeout(200)
+    assert state(epage, "v.selected.length") > 1
+
+
+def test_the_wire_tool_draws_a_shape_of_the_layers_measured_width(epage):
+    width = epage.evaluate("""() => { const v = window.GDSViewer.instances.gv;
+      v.setMode('wire'); v.editState.layer = 'M0'; v.editState.trackSnap = false;
+      v.editState.pending = {kind: 'wire', points: [[0.02, 0.06], [0.12, 0.06]]};
+      v.finishWire();
+      return v.measuredWidthNm('M0'); }""")
+    epage.wait_for_timeout(200)
+    ops = journal(epage)
+    assert len(ops) == 1 and ops[0]["op"] == "insert"
+    shape = state(epage, "v.selected[0].shape")
+    assert abs(shape["h"] * 1000 - width) < 1e-6      # the width it measured, not a guess
+    assert abs(shape["w"] - 0.1) < 1e-6
+
+
+def test_a_label_becomes_an_insert_text(epage):
+    epage.evaluate("""() => { const v = window.GDSViewer.instances.gv;
+      v.addLabel('M1', 'NEWPIN', {x: 0.07, y: 0.065}); }""")
+    epage.wait_for_timeout(150)
+    ops = journal(epage)
+    assert ops[0]["op"] == "insert_text"
+    assert ops[0]["text"] == "NEWPIN" and ops[0]["at_um"] == [0.07, 0.065]
+
+
+def test_the_edit_tab_lists_the_pending_changes(epage):
+    epage.evaluate("""() => { const v = window.GDSViewer.instances.gv;
+      v.addShape('M2', [[0.5,0.5],[0.5,0.52],[0.54,0.52],[0.54,0.5]]);
+      v.addLabel('M1', 'X', {x: 0.1, y: 0.1}); }""")
+    epage.locator(".gv-tab", has_text="Edit").click()
+    epage.wait_for_timeout(200)
+    # inner_text returns what CSS renders, and the section heading is uppercased.
+    text = epage.locator(".gv-pbody").inner_text().lower()
+    assert "2 pending change" in text
+    assert epage.locator(".gv-mkr.gv-cell").count() == 2
+
+
+def test_a_read_only_viewer_refuses_to_apply(epage):
+    """The document mount has nowhere to send a journal, and says so."""
+    epage.evaluate("""() => { const v = window.GDSViewer.instances.gv;
+      v.addShape('M2', [[0.6,0.6],[0.6,0.62],[0.64,0.62],[0.64,0.6]]);
+      v.commitEdits(); }""")
+    epage.wait_for_timeout(200)
+    assert "read-only" in epage.locator(".gv-toast").inner_text()
+
+
+def test_the_measured_width_is_offered_as_a_measurement_not_a_rule(epage):
+    epage.locator(".gv-tab", has_text="Edit").click()
+    epage.wait_for_timeout(150)
+    text = epage.locator(".gv-pbody").inner_text()
+    assert "measurement, not a rule" in text
+
+
+def test_what_the_editor_previews_is_what_klayout_writes(epage, tmp_path):
+    """The one test that can catch the browser and the file drifting apart.
+
+    Six different edits, applied for real, then compared polygon by polygon against
+    what the browser was showing when the journal was built.
+    """
+    from analyzer.edit import apply_edits
+
+    epage.evaluate("""() => { const v = window.GDSViewer.instances.gv;
+      v.editState.layer = 'M1';
+      v.addShape('M1', [[0.05,0.05],[0.05,0.08],[0.09,0.08],[0.09,0.05]]);
+      v.addShape('M2', [[0.10,0.02],[0.10,0.05],[0.14,0.05],[0.14,0.02]]);
+      const np = v.A.layers.find(l => l.name === 'NPOLY');
+      v.selected = [{layer: 'NPOLY', shape: np.shapes[0]}];
+      v.moveSelection(0.005, 0.010, true);
+      const nd = v.A.layers.find(l => l.name === 'NDIFFCON');
+      v.selected = [{layer: 'NDIFFCON', shape: nd.shapes[0]}];
+      v.deleteSelection();
+      const m0 = v.A.layers.find(l => l.name === 'M0');
+      v.selected = [{layer: 'M0', shape: m0.shapes[0]}];
+      v.reshape(v.selected[0], m0.shapes[0].o.map(p => [p[0], p[1] + 0.002]));
+      v.addLabel('M1', 'ROUNDTRIP', {x: 0.07, y: 0.065}); }""")
+    epage.wait_for_timeout(250)
+
+    ops = journal(epage)
+    assert sorted(op["op"] for op in ops) == [
+        "delete", "insert", "insert", "insert_text", "replace", "replace"]
+    preview = epage.evaluate("""() => { const v = window.GDSViewer.instances.gv;
+      const out = {};
+      for (const l of v.A.layers) out[l.name] = l.shapes.filter(s => !s._del).map(s => s.o);
+      return out; }""")
+
+    layermap = load_lyp(default_layermap())
+    out = tmp_path / "roundtrip.gds"
+    report = apply_edits(GDS, ops, out, layermap=layermap)
+    assert report["applied"] == len(ops)
+    assert report["refused"] == []
+
+    written = shape_outlines(out, layermap)
+    for row in written["layers"]:
+        got = sorted(tuple(map(tuple, s["outline_um"])) for s in row["shapes"])
+        want = sorted(tuple(map(tuple, o)) for o in preview.get(row["name"], []))
+        assert got == want, f"{row['name']} differs between the preview and the file"
+    assert any(l["text"] == "ROUNDTRIP"
+               for row in written["layers"] for l in row["labels"])

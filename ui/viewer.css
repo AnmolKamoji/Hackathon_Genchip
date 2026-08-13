@@ -376,6 +376,8 @@ kbd {
    grid pushed the net name into the 8px dot column and it overlapped the layers. */
 .gv-mkr.gv-net { grid-template-columns: 34px 1fr auto; }
 .gv-mkr.gv-cell { grid-template-columns: 26px 1fr auto; }
+/* With the editor on, a cell row also carries a place button. */
+.gv-mkr.gv-cell:has(.gv-solo) { grid-template-columns: 26px 1fr auto 18px; }
 
 /* Difference rows carry the XOR side in the dot, matching the colours drawn on
    the canvas: red is only-in-A, green only-in-B. */
@@ -446,3 +448,31 @@ kbd {
   z-index: 9;
   box-shadow: 0 6px 20px rgba(0,0,0,.5);
 }
+
+/* ---- editor ---- */
+
+.gv-erow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  font-size: 11.5px;
+}
+.gv-erow .gv-dim { min-width: 34px; }
+
+.gv-select {
+  flex: 1;
+  height: 25px;
+  padding: 0 6px;
+  font: 11px ui-monospace, monospace;
+  color: var(--gv-text);
+  background: #131c25;
+  border: 1px solid #26333f;
+  border-radius: 5px;
+  outline: none;
+}
+.gv-select:focus { border-color: var(--gv-accent); }
+
+/* An uncommitted change is drawn with a green edge on the canvas; the same green
+   marks the panel so the two read as one state. */
+.gv-dirty { color: #7ee787; }

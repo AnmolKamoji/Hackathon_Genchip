@@ -214,12 +214,65 @@
       this.findQuery = "";
       this.findHits = [];
       this.findIndex = -1;
+      // Editing is off unless the page said the layout may be edited: a read-only
+      // mount must not offer a tool that cannot save.
+      this.edit = payload.editable || null;
+      if (this.edit && this.initEditor) this.initEditor();
       // A comparison opens on the differences: that is the question it was opened
       // to answer, and the layer list is one click away.
       this.tab = this.compare ? "diffs" : "layers";
 
       this.build();
       this.fit(false);
+      this.draw();
+    }
+
+    // Replace the geometry without disturbing the view.
+    //
+    // This is what a rerun looks like after an edit was written: the drawing has to
+    // become what Python actually wrote to the file, while the zoom, the visible
+    // layers and the open tab stay where the user left them. Rebuilding the viewer
+    // instead would throw the user back to the whole-cell view after every edit,
+    // which makes a sequence of small changes unusable.
+    setPayload(payload, revision) {
+      const keepVisible = new Set(this.visible);
+      const keepTab = this.tab;
+      const view = { scale: this.scale, cx: this.cx, cy: this.cy };
+
+      this.data = payload;
+      this.compare = !!payload.regions;
+      this.A = this.compare ? payload.a : payload;
+      this.B = this.compare ? payload.b : null;
+      this.markers = payload.markers || [];
+      this.nets = payload.nets || [];
+      this.tracks = payload.tracks || {};
+      this.tree = payload.tree || {};
+      this.edit = payload.editable || this.edit;
+      this.revision = revision;
+
+      // Selections point at objects that no longer exist.
+      this.selection = null;
+      this.selected = [];
+      this.activeMarker = null;
+      this.netHighlight = null;
+      this.probeA = this.probeB = null;
+      this.findHits = [];
+      this.findIndex = -1;
+      if (this.editState) this.editState.pending = null;
+
+      // A layer that has just gained its first shape was not in the old visible set,
+      // so it would be drawn invisible - the edit would appear to have done nothing.
+      const known = new Set(this.A.layers.map((l) => l.name));
+      this.visible = new Set([...keepVisible].filter((n) => known.has(n)));
+      for (const name of this.A.defaultOn || []) {
+        if (!keepVisible.has(name) && known.has(name)) continue;
+        this.visible.add(name);
+      }
+      this.tab = keepTab;
+      this.scale = view.scale; this.cx = view.cx; this.cy = view.cy;
+      this.buildToolbar();
+      this.buildPanel();
+      this.sync();
       this.draw();
     }
 
@@ -385,6 +438,8 @@
       find.appendChild(this.findCount);
       this.button(find, ICON.fwd, "Next match (Enter)", () => this.stepFind(1));
 
+      if (this.edit && this.buildEditToolbar) this.buildEditToolbar(t);
+
       const out = this.group(t, "");
       this.button(out, ICON.save, "Save this view as a PNG", () => this.exportPNG());
       this.button(out, ICON.bookmark, "Bookmark this view", () => this.addBookmark());
@@ -416,6 +471,7 @@
            ["markers", "Rules", this.markers.length],
            ["nets", "Nets", this.nets.length],
            ["cells", "Cells", (this.tree.cells || []).length],
+           ...(this.edit ? [["edit", "Edit", ""]] : []),
            ["views", "Views", ""]];
       this.tabButtons = {};
       for (const [id, label, count] of tabs) {
@@ -453,6 +509,7 @@
       else if (this.tab === "nets") this.renderNetsTab();
       else if (this.tab === "cells") this.renderCellsTab();
       else if (this.tab === "diffs") this.renderDiffsTab();
+      else if (this.tab === "edit" && this.renderEditTab) this.renderEditTab();
       else this.renderViewsTab();
       this.sync();
     }
@@ -1029,6 +1086,20 @@
                     (cell.bbox ? `\nbbox ${fmtLen(cell.bbox[2] - cell.bbox[0])} × ` +
                                  `${fmtLen(cell.bbox[3] - cell.bbox[1])}` : "");
         row.addEventListener("click", () => this.showCell(cell));
+        // Placing a cell into itself is the one thing GDSII cannot express, so the
+        // top cell is not offered here rather than refused after the click.
+        if (this.edit && this.armPlacement && !cell.isTop) {
+          const place = document.createElement("button");
+          place.className = "gv-solo";
+          place.type = "button";
+          place.textContent = "＋";
+          place.title = `Place an instance of ${cell.name}`;
+          place.addEventListener("click", (e) => {
+            e.preventDefault(); e.stopPropagation();
+            this.armPlacement(cell.name);
+          });
+          row.appendChild(place);
+        }
         list.appendChild(row);
       }
 
@@ -1554,6 +1625,7 @@
       let best = null;
       for (const layer of this.activeLayers("a")) {
         for (const s of layer.shapes) {
+          if (s._del) continue;                // deleted by an uncommitted edit
           if (!pointInPoly(wxp, wyp, s.o)) continue;
           const area = Math.abs(s.w * s.h) || s.a || 0;
           if (!best || area < best.area) {
@@ -1572,6 +1644,7 @@
       let best = null;
       for (const layer of this.activeLayers("a")) {
         for (const s of layer.shapes) {
+          if (s._del) continue;                // deleted by an uncommitted edit
           const [bx0, by0, bx1, by1] = polyBBox(s.o);
           if (wxp < bx0 - tol || wxp > bx1 + tol || wyp < by0 - tol || wyp > by1 + tol) continue;
           for (let i = 0; i < s.o.length; i++) {
@@ -1634,6 +1707,12 @@
           this.drag = { kind: "swipe" };
           return;
         }
+        // An edit tool owns the left button. Right and middle still pan, which is
+        // what stops a modal drawing tool from trapping the view.
+        if (this.editDown && e.button === 0 && this.editDown(e, px, py, w)) {
+          this.draw();
+          return;
+        }
         // Right button or middle always pans, whatever the tool - the escape hatch
         // that keeps a modal tool from trapping the view.
         if (e.button === 2 || e.button === 1 || (this.mode === "pan" && !e.shiftKey)) {
@@ -1666,6 +1745,10 @@
         this.cursor = { px, py };
         const wxp = this.wx(px), wyp = this.wy(py);
 
+        if (this.editMove && this.editMove(e, px, py, wxp, wyp)) {
+          this.draw();
+          return;
+        }
         if (this.drag) {
           if (this.drag.kind === "pan") {
             this.cx = this.drag.cx - (px - this.drag.px) / this.scale;
@@ -1706,6 +1789,7 @@
       });
 
       const finish = (e) => {
+        if (this.editUp && this.editUp(e)) { this.draw(); return; }
         if (!this.drag) return;
         const d = this.drag;
         this.drag = null;
@@ -1760,6 +1844,9 @@
         const tag = (e.target && e.target.tagName) || "";
         if (tag === "INPUT" || tag === "TEXTAREA") return;
         const k = e.key.toLowerCase();
+        // The editor takes the keys it owns before the view shortcuts see them:
+        // with a selection, Delete has to delete a shape rather than do nothing.
+        if (this.editKey && this.editKey(e, k)) return;
         const map = {
           f: () => this.fit(), r: () => this.setMode("ruler"), v: () => this.setMode("pan"),
           a: () => this.setMode("area"), p: () => this.setMode("probe"),
@@ -1929,6 +2016,7 @@
       if (this.netHighlight) this.drawNet(ctx);
       if (this.cellBoxesOn || this.activePlacement) this.drawCellBoxes(ctx);
       if (this.findHits.length) this.drawFindHits(ctx);
+      if (this.drawEdit) this.drawEdit(ctx);
       this.drawBoundary(ctx);
       if (this.labelsOn) this.drawLabels(ctx);
       this.drawAnnotations(ctx);
@@ -1977,6 +2065,7 @@
         ctx.fillStyle = style === "solid" ? layer.colour : hatch(ctx, layer.colour, style);
         ctx.lineWidth = 1;
         for (const s of layer.shapes) {
+          if (s._del) continue;                // deleted by an uncommitted edit
           const [bx0, by0, bx1, by1] = polyBBox(s.o);
           // Cull off-screen shapes: at deep zoom this is most of the cell.
           if (this.sx(bx1) < -4 || this.sx(bx0) > this.vw + 4 ||

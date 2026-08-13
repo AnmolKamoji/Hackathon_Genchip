@@ -274,13 +274,22 @@ def measure_layers(gds_path: str | Path,
 
 def shape_outlines(gds_path: str | Path, layermap: dict[str, Any] | None = None,
                    max_shapes: int = 8000,
-                   role_overrides: dict[str, str] | None = None) -> dict[str, Any]:
+                   role_overrides: dict[str, str] | None = None,
+                   include_identity: bool = False) -> dict[str, Any]:
     """Every shape's outline and its own dimensions, per layer.
 
     This is what a layout *view* needs, as opposed to the per-layer summary above:
     the polygons themselves, each carrying its width, height, centre and area. The
     dimensions travel with the shape so they can be read off directly rather than
     measured with a ruler, which is the slow part of inspecting a layout.
+
+    `include_identity` adds what an *editor* needs and a viewer does not: which cell
+    the shape actually lives in, its outline in that cell's own coordinates as exact
+    database units, and its rank among identical siblings. The polygons here are
+    flattened through the hierarchy, so the shape you see may belong to a child cell
+    and be shared by every placement of it - editing it by screen position would
+    silently change the wrong thing. It is off by default because it roughly doubles
+    the payload and nothing but the editor can use it.
     """
     import klayout.db as db
 
@@ -303,6 +312,16 @@ def shape_outlines(gds_path: str | Path, layermap: dict[str, Any] | None = None,
         meta = roles.get(key, {})
         shapes: list[dict[str, Any]] = []
         labels: list[dict[str, Any]] = []
+        # Identical polygons can repeat inside one cell on one layer, so the local
+        # outline alone does not identify a shape. The rank among identical siblings
+        # completes it, and both are exact integers - no rounding to disagree over.
+        #
+        # The counter is keyed by the *placement* - the cell and the transform that
+        # got us there - not by the cell alone. A cell placed twice is visited twice
+        # and its shapes repeat, so counting per cell would give the second placement
+        # rank 1 for a shape that is the only one of its kind inside the definition,
+        # and the edit would look for a sibling that does not exist.
+        seen_local: dict[tuple[str, str, tuple], int] = {}
         it = top.begin_shapes_rec(li)
         while not it.at_end():
             shape, trans = it.shape(), it.trans()
@@ -317,16 +336,32 @@ def shape_outlines(gds_path: str | Path, layermap: dict[str, Any] | None = None,
                 it.next()
                 continue
             if shape.is_box():
-                poly = db.Polygon(shape.box).transformed(trans)
+                local = db.Polygon(shape.box)
             elif shape.is_polygon():
-                poly = shape.polygon.transformed(trans)
+                local = shape.polygon
             elif shape.is_path():
-                poly = shape.path.polygon().transformed(trans)
+                local = shape.path.polygon()
             else:
                 it.next()
                 continue
+            poly = local.transformed(trans)
             box = poly.bbox()
+            identity = None
+            if include_identity:
+                owner = it.cell().name
+                where = trans.to_s()
+                points = tuple((pt.x, pt.y) for pt in local.each_point_hull())
+                rank = seen_local.get((owner, where, points), 0)
+                seen_local[(owner, where, points)] = rank + 1
+                identity = {"cell": owner, "local_dbu": [list(p) for p in points],
+                            "dup": rank, "in_top": owner == top.name,
+                            # The transform from this shape's cell to the top cell,
+                            # exactly as KLayout writes it. An edit arrives in the
+                            # coordinates the user saw - the top cell's - and this is
+                            # what maps it back to where the shape actually lives.
+                            "trans": where}
             shapes.append({
+                **({"id": identity} if identity else {}),
                 "outline_um": [[round(pt.x * dbu, 6), round(pt.y * dbu, 6)]
                                for pt in poly.each_point_hull()],
                 "width_um": round(box.width() * dbu, 6),

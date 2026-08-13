@@ -14,6 +14,8 @@ from ai.llm import ask_llm, generate_comparison, generate_review, provider_statu
 from analyzer.comparison import compare_metadata
 from analyzer.classify import classify
 from analyzer.drc import check_layout, load_rules
+from analyzer.edit import EditError, apply_to_bytes, describe as describe_edits
+from analyzer.edit import normalise as normalise_edits
 from analyzer.plots import (change_hotspot, density_profile, difference_grid,
                             difference_map, layout_view, similarity_matrix)
 from analyzer.present import findings, headline, nm, pct_of, split_primary, um2
@@ -31,8 +33,9 @@ from analyzer.techparams import (compare_to_reference, find_reference,
                                 load_reference, tech_parameters)
 from ui.theme import (CSS, chips, hint, section, style_figure, swatch,
                       verdict_html)
-from ui.workspace import (clear_focus, compare_panel, focus_request, layout_panel,
-                          workspace)
+from ui.viewer_data import editable_payload
+from ui.workspace import (clear_focus, compare_panel, editor_panel,
+                          focus_request, layout_panel, workspace)
 
 # Explicit path: the no-argument form finds .env by inspecting the call stack,
 # which raises when app.py is executed in an embedded or exec'd context.
@@ -89,6 +92,32 @@ if not uploads:
         "densities in one view."
     )
     st.stop()
+
+
+# --- edited layouts ---------------------------------------------------------
+# An edit produces a new file. It is held in session state under the upload's name,
+# and every analysis below reads through `file_bytes`, so the moment an edit is
+# written the design rule check, the connectivity and the classification are all
+# re-run against what was actually written rather than against the original upload.
+# The upload itself is never modified: it is the way back.
+EDITED_KEY = "edited_files"
+
+
+def edited_bytes(name: str) -> bytes | None:
+    return (st.session_state.get(EDITED_KEY) or {}).get(name)
+
+
+def file_bytes(upload) -> bytes:
+    """The current contents of an upload: the edited version if there is one."""
+    return edited_bytes(upload.name) or upload.getvalue()
+
+
+def store_edit(name: str, data: bytes) -> None:
+    st.session_state.setdefault(EDITED_KEY, {})[name] = data
+
+
+def revert_edit(name: str) -> None:
+    (st.session_state.get(EDITED_KEY) or {}).pop(name, None)
 
 
 @st.cache_data(show_spinner=False)
@@ -234,14 +263,20 @@ def process_drc(gds_bytes: bytes, filename: str, layermap: dict | None, stack: d
 
 @st.cache_data(show_spinner="Reading layout geometry...")
 def process_outlines(gds_bytes: bytes, filename: str, layermap: dict | None,
-                     stack: dict | None):
-    """Shape outlines for the layout view. Cached: one read per file."""
+                     stack: dict | None, identity: bool = False):
+    """Shape outlines for the layout view. Cached: one read per file.
+
+    `identity` is what turns the view into something editable: it adds, per shape,
+    the cell it lives in and its outline in that cell's own database units. Off for
+    the read-only views, because it roughly doubles the payload.
+    """
     with tempfile.TemporaryDirectory() as td:
         path = Path(td) / filename
         path.write_bytes(gds_bytes)
         overrides = (stack or {}).get("role_overrides") or None
         try:
-            return shape_outlines(path, layermap, role_overrides=overrides), None
+            return shape_outlines(path, layermap, role_overrides=overrides,
+                                  include_identity=identity), None
         except Exception as exc:
             return None, str(exc)
 
@@ -347,7 +382,7 @@ for upload in uploads:
         side = sidecars[0]
     try:
         metadata_list.append(process_gds(
-            upload.getvalue(), upload.name,
+            file_bytes(upload), upload.name,
             side.getvalue() if side else None,
             side.name if side else None,
             use_sidecar,
@@ -360,7 +395,7 @@ if not metadata_list:
     st.stop()
 
 connectivity_list = [
-    process_connectivity(upload.getvalue(), upload.name, layermap, conn_stack,
+    process_connectivity(file_bytes(upload), upload.name, layermap, conn_stack,
                          # A fused/sidecar metadata object carries the via layer
                          # names that state the stack; a gds-only one does not.
                          meta if meta.get("metadata_source") in ("fused", "sidecar") else None)
@@ -371,7 +406,7 @@ connectivity_list = [
 # connectivity into the cached analyzer output.
 for _upload, _meta, _conn in zip(uploads[:len(metadata_list)], metadata_list, connectivity_list):
     _meta["connectivity"] = _conn
-    _extra = process_extras(_upload.getvalue(), _upload.name, layermap, conn_stack)
+    _extra = process_extras(file_bytes(_upload), _upload.name, layermap, conn_stack)
     _meta["hierarchy"] = _extra["hierarchy"]
     _meta["measurements"] = _extra["measurements"]
 
@@ -567,6 +602,77 @@ def answer_for(question: str, metadata: dict, history: list | None = None) -> st
 
 
 
+@st.cache_data(show_spinner=False)
+def _xor_bytes(a_bytes: bytes, b_bytes: bytes, name: str, layermap: dict | None):
+    """XOR two versions of one file. Cached on the bytes, so repeat views are free."""
+    with tempfile.TemporaryDirectory() as td:
+        a = Path(td) / f"before_{name}"
+        b = Path(td) / f"after_{name}"
+        a.write_bytes(a_bytes)
+        b.write_bytes(b_bytes)
+        from analyzer.xor_diff import xor_compare
+        return xor_compare(a, b, layermap)
+
+
+def _diff_against_upload(upload, edited: bytes) -> str | None:
+    """One line describing how the edited file differs from the one uploaded."""
+    try:
+        result = _xor_bytes(upload.getvalue(), edited, upload.name, layermap)
+    except Exception:
+        return None
+    summary = result.get("summary") or {}
+    changed = summary.get("layers_changed")
+    if not changed:
+        return "no geometric difference from the upload"
+    return (f"{changed} layer(s) differ, {um2(summary.get('xor_area_um2') or 0, 3)} "
+            f"of XOR area — {um2(summary.get('removed_area_um2') or 0, 3)} removed, "
+            f"{um2(summary.get('added_area_um2') or 0, 3)} added")
+
+
+def _handle_edit_event(event: dict | None, upload, name: str) -> None:
+    """Serve what the editor asked for: write the edits, or throw them away.
+
+    The nonce is what makes this safe. A component keeps returning its last value on
+    every rerun, so without it the same commit would be applied again on the next
+    interaction - a two-nanometre move would walk across the layout.
+    """
+    if not event or not isinstance(event, dict):
+        return
+    nonce = event.get("nonce")
+    if nonce is not None and st.session_state.get("ws_last_event") == nonce:
+        return
+    st.session_state["ws_last_event"] = nonce
+
+    if event.get("type") == "discard":
+        st.session_state["ws_revision"] = int(st.session_state.get("ws_revision", 0)) + 1
+        st.rerun()
+
+    if event.get("type") != "commit":
+        return
+    edits = normalise_edits(event.get("edits") or [])
+    if not edits:
+        return
+    try:
+        data, report = apply_to_bytes(file_bytes(upload), name, edits,
+                                      layermap=layermap,
+                                      grid_nm=event.get("gridNm"))
+    except EditError as exc:
+        # Atomic: nothing was written, so the layout on screen is still the file.
+        st.session_state["ws_edit_error"] = str(exc)
+        st.session_state["ws_revision"] = int(st.session_state.get("ws_revision", 0)) + 1
+        st.rerun()
+        return
+    store_edit(name, data)
+    st.session_state["ws_edit_error"] = None
+    st.session_state["ws_edit_report"] = report
+    # What the edit changed against the file that was uploaded, measured by the same
+    # XOR the comparison page uses. This is the review an editor usually cannot give
+    # you: KLayout will happily save a change without telling you what it was.
+    st.session_state["ws_edit_diff"] = _diff_against_upload(upload, data)
+    st.session_state["ws_revision"] = int(st.session_state.get("ws_revision", 0)) + 1
+    st.rerun()
+
+
 # --- expanded workspace ----------------------------------------------------
 # Rendered before the page body and then the script stops, so the workspace is
 # the whole screen rather than something appended below a page the user has to
@@ -576,9 +682,9 @@ _focus = focus_request()
 if _focus:
     def _render_focus() -> None:
         if _focus["kind"] == "compare":
-            oa, ea = process_outlines(uploads[_idx_of[_focus["a"]]].getvalue(),
+            oa, ea = process_outlines(file_bytes(uploads[_idx_of[_focus["a"]]]),
                                       _focus["a"], layermap, conn_stack)
-            ob, eb = process_outlines(uploads[_idx_of[_focus["b"]]].getvalue(),
+            ob, eb = process_outlines(file_bytes(uploads[_idx_of[_focus["b"]]]),
                                       _focus["b"], layermap, conn_stack)
             if ea or eb or not oa or not ob:
                 st.error(f"Could not read the geometry: {ea or eb}")
@@ -589,7 +695,7 @@ if _focus:
             # same result the comparison section will show, not a second opinion.
             _res, _err = run_xor(
                 tuple(u.name for u in uploads),
-                tuple(u.getvalue() for u in uploads),
+                tuple(file_bytes(u) for u in uploads),
                 layermap, st.session_state.get("xor_tol", 0.0), conn_stack)
             xor_detail = {}
             if _res:
@@ -602,27 +708,43 @@ if _focus:
         else:
             name = _focus.get("title") or uploads[0].name
             idx = _idx_of.get(name, 0)
-            outlines, error = process_outlines(
-                uploads[idx].getvalue(), name, layermap, conn_stack)
+            editing = bool(st.session_state.get("ws_editing"))
+            data = file_bytes(uploads[idx])
+            outlines, error = process_outlines(data, name, layermap, conn_stack,
+                                               identity=editing)
             if error or not outlines:
                 st.error(f"Could not read the geometry: {error}")
                 return
             # The expanded view gets exactly what the inline one gets. Dropping the
             # analysis here would leave the big view with empty Rules, Nets and
             # Cells tabs - the one place a reviewer is most likely to look for them.
-            drc, _ = process_drc(uploads[idx].getvalue(), name, layermap, conn_stack)
-            cls, _ = process_classification(uploads[idx].getvalue(), name, layermap,
-                                            conn_stack, tuple(u.name for u in uploads))
-            layout_panel(outlines, key="ws_lv", colours=_layer_colours, title=name,
-                         height=760, expandable=False,
-                         drc=drc,
-                         connectivity=process_net_shapes(
-                             uploads[idx].getvalue(), name, layermap, conn_stack,
-                             metadata_list[idx] if metadata_list[idx].get("metadata_source")
-                             in ("fused", "sidecar") else None),
-                         pitch=(cls or {}).get("pitch"),
-                         hierarchy=metadata_list[idx].get("hierarchy"),
-                         tree=process_tree(uploads[idx].getvalue(), name))
+            drc, _ = process_drc(data, name, layermap, conn_stack)
+            cls, _ = process_classification(data, name, layermap, conn_stack,
+                                            tuple(u.name for u in uploads))
+            analysis = dict(
+                drc=drc,
+                connectivity=process_net_shapes(
+                    data, name, layermap, conn_stack,
+                    metadata_list[idx] if metadata_list[idx].get("metadata_source")
+                    in ("fused", "sidecar") else None),
+                pitch=(cls or {}).get("pitch"),
+                hierarchy=metadata_list[idx].get("hierarchy"),
+                tree=process_tree(data, name),
+            )
+            if not editing:
+                layout_panel(outlines, key="ws_lv", colours=_layer_colours, title=name,
+                             height=760, expandable=False, **analysis)
+                return
+            # Editing: the same viewer, mounted as a component so it can send the
+            # journal back. Every check above was re-run on the *edited* file, so
+            # the markers beside the drawing describe what is on screen.
+            event = editor_panel(
+                outlines, key="ws_edit", colours=_layer_colours, title=name,
+                editable=editable_payload(outlines, layermap,
+                                          (cls or {}).get("tech_parameters")),
+                revision=int(st.session_state.get("ws_revision", 0)),
+                height=760, **analysis)
+            _handle_edit_event(event, uploads[idx], name)
 
     _focus_name = _focus.get("title") or _focus.get("a")
     _focus_meta = next((m for m in metadata_list
@@ -633,7 +755,7 @@ if _focus:
     # "no pitch metrics are available" for a file the page below reports a pitch
     # for, which reads as the two views disagreeing.
     _focus_cls, _ = process_classification(
-        uploads[_idx_of.get(_focus_name, 0)].getvalue(),
+        file_bytes(uploads[_idx_of.get(_focus_name, 0)]),
         _focus_meta["source"]["file"], layermap, conn_stack,
         tuple(u.name for u in uploads))
     if _focus_cls:
@@ -641,13 +763,61 @@ if _focus:
         _focus_meta["pitch"] = _focus_cls.get("pitch")
         if _focus_cls.get("tech_parameters"):
             _focus_meta["tech_parameters"] = _focus_cls["tech_parameters"]
-    _focus_drc, _ = process_drc(uploads[_idx_of.get(_focus_name, 0)].getvalue(),
+    _focus_drc, _ = process_drc(file_bytes(uploads[_idx_of.get(_focus_name, 0)]),
                                 _focus_meta["source"]["file"], layermap, conn_stack)
     if _focus_drc:
         _focus_meta["drc"] = _focus_drc
+    def _edit_bar(slot) -> None:
+        """Edit mode, and what comes with it: the file out, and the way back.
+
+        The download is the whole point of an editor. A change you cannot take away
+        with you is a drawing, not an edit - so the button is beside the toggle
+        rather than somewhere further down the page.
+        """
+        editing = bool(st.session_state.get("ws_editing"))
+        if slot.toggle("Edit layout", value=editing, key="ws_editing",
+                       help="Draw, move, reshape and delete. Changes are written to "
+                            "a new file with KLayout; the upload is never modified."):
+            pass
+        edited = edited_bytes(_focus_name)
+        if edited:
+            slot.download_button("Download edited .gds", edited,
+                                 file_name=f"edited_{_focus_name}",
+                                 mime="application/octet-stream",
+                                 key="ws_download", width="stretch")
+            if slot.button("Revert to the upload", key="ws_revert", width="stretch"):
+                revert_edit(_focus_name)
+                st.session_state["ws_revision"] = int(
+                    st.session_state.get("ws_revision", 0)) + 1
+                st.rerun()
+
+    if _focus["kind"] == "layout":
+        if st.session_state.get("ws_edit_error"):
+            st.error(f"Nothing was written. {st.session_state['ws_edit_error']}")
+        report = st.session_state.get("ws_edit_report")
+        if report and report.get("applied"):
+            st.success(f"{report['applied']} change(s) written to a new file — "
+                       "every check on this page has been re-run on it.")
+            for warning in report.get("warnings") or []:
+                st.warning(warning)
+            grid = report.get("off_grid") or {}
+            if grid.get("added"):
+                # Worth a warning of its own: an off-grid vertex looks right on
+                # screen and reads right in a report, and the mask writer rounds it
+                # somewhere else.
+                st.warning(
+                    f"{grid['added']} shape(s) this edit wrote have a vertex off the "
+                    f"{grid['grid_nm']:g} nm grid: "
+                    + ", ".join(f"{row['layer']} ({row['shapes']})"
+                                for row in grid.get("layers") or []))
+            diff = st.session_state.get("ws_edit_diff")
+            if diff:
+                st.caption(f"Against the upload: {diff}")
+
     workspace(_focus, _render_focus,
               lambda q: answer_for(q, _focus_meta,
-                                   history=st.session_state.get("ws_chat", [])[-6:]))
+                                   history=st.session_state.get("ws_chat", [])[-6:]),
+              edit_bar=_edit_bar if _focus["kind"] == "layout" else None)
     st.stop()
 
 st.markdown(section("Per-layout detail"), unsafe_allow_html=True)
@@ -675,7 +845,7 @@ for idx, metadata in enumerate(metadata_list):
             st.warning(w)
 
         cls, cls_error = process_classification(
-            uploads[idx].getvalue(), uploads[idx].name, layermap, conn_stack,
+            file_bytes(uploads[idx]), uploads[idx].name, layermap, conn_stack,
             tuple(u.name for u in uploads))
         if cls:
             metadata["classification"] = cls
@@ -849,19 +1019,19 @@ for idx, metadata in enumerate(metadata_list):
         # Fetched before the tabs because the viewer in the Layout tab turns rule
         # results into clickable markers and the cell tree into a navigator. All
         # cached calls.
-        drc_for_view, _ = process_drc(uploads[idx].getvalue(), uploads[idx].name,
+        drc_for_view, _ = process_drc(file_bytes(uploads[idx]), uploads[idx].name,
                                       layermap, conn_stack)
         hierarchy_for_view = metadata.get("hierarchy")
-        tree_for_view = process_tree(uploads[idx].getvalue(), uploads[idx].name)
+        tree_for_view = process_tree(file_bytes(uploads[idx]), uploads[idx].name)
         # Net polygons, so a click in the viewer can highlight a whole net. The
         # page's own connectivity block deliberately carries no polygons.
         nets_for_view = process_net_shapes(
-            uploads[idx].getvalue(), uploads[idx].name, layermap, conn_stack,
+            file_bytes(uploads[idx]), uploads[idx].name, layermap, conn_stack,
             metadata if metadata.get("metadata_source") in ("fused", "sidecar") else None)
 
         with tabs[0]:
             outlines, outline_error = process_outlines(
-                uploads[idx].getvalue(), uploads[idx].name, layermap, conn_stack)
+                file_bytes(uploads[idx]), uploads[idx].name, layermap, conn_stack)
             if outline_error:
                 st.error(f"Could not read the geometry for drawing: {outline_error}")
             elif outlines:
@@ -873,7 +1043,7 @@ for idx, metadata in enumerate(metadata_list):
                                    tree=tree_for_view)
 
         with tabs[1]:
-            drc, drc_error = process_drc(uploads[idx].getvalue(), uploads[idx].name,
+            drc, drc_error = process_drc(file_bytes(uploads[idx]), uploads[idx].name,
                                         layermap, conn_stack)
             if drc_error:
                 st.error(f"Design rule check failed: {drc_error}")
@@ -999,7 +1169,7 @@ if len(metadata_list) == 2:
 
 if len(uploads) >= 2:
     xor_result, xor_error = run_xor(
-        tuple(u.name for u in uploads), tuple(u.getvalue() for u in uploads),
+        tuple(u.name for u in uploads), tuple(file_bytes(u) for u in uploads),
         layermap, st.session_state.get("xor_tol", 0.0), conn_stack)
 
     if xor_error:
@@ -1043,9 +1213,9 @@ if len(uploads) >= 2:
             # drawn on top. The old figure could only show the regions - you
             # could see *that* something changed but not what it sat in, so
             # every finding meant opening KLayout to get the context back.
-            oa, ea = process_outlines(uploads[_idx_of[pair["a"]]].getvalue(),
+            oa, ea = process_outlines(file_bytes(uploads[_idx_of[pair["a"]]]),
                                       pair["a"], layermap, conn_stack)
-            ob, eb = process_outlines(uploads[_idx_of[pair["b"]]].getvalue(),
+            ob, eb = process_outlines(file_bytes(uploads[_idx_of[pair["b"]]]),
                                       pair["b"], layermap, conn_stack)
             if ea or eb or not oa or not ob:
                 st.error(f"Could not read the geometry for drawing: {ea or eb}")

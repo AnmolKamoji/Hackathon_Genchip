@@ -16,6 +16,7 @@ from typing import Any, Callable
 
 import streamlit as st
 
+from ui.viewer import interactive as mount_viewer
 from ui.viewer import render as render_viewer
 from ui.viewer_data import build, build_comparison, with_analysis
 
@@ -40,7 +41,9 @@ def layout_panel(outlines: dict[str, Any], key: str, colours: dict[str, str],
                  connectivity: dict[str, Any] | None = None,
                  pitch: dict[str, Any] | None = None,
                  hierarchy: dict[str, Any] | None = None,
-                 tree: dict[str, Any] | None = None) -> None:
+                 tree: dict[str, Any] | None = None,
+                 editable: dict[str, Any] | None = None,
+                 revision: int = 0) -> dict[str, Any] | None:
     """One layout in the interactive viewer.
 
     The analysis blocks are optional but change what the viewer is: with them, rule
@@ -50,10 +53,10 @@ def layout_panel(outlines: dict[str, Any], key: str, colours: dict[str, str],
     """
     payload = with_analysis(build(outlines, fallback_colours=colours, title=title),
                             drc=drc, connectivity=connectivity, pitch=pitch,
-                            hierarchy=hierarchy, tree=tree)
+                            hierarchy=hierarchy, tree=tree, editable=editable)
     if not payload["layers"]:
         st.info("This layout contains no drawable geometry.")
-        return
+        return None
     for warning in payload["warnings"]:
         st.warning(warning)
 
@@ -67,6 +70,26 @@ def layout_panel(outlines: dict[str, Any], key: str, colours: dict[str, str],
             request_focus("layout", key=key, title=title)
             st.rerun()
     render_viewer(payload, height=height, key=key)
+    return None
+
+
+def editor_panel(outlines: dict[str, Any], key: str, colours: dict[str, str],
+                 editable: dict[str, Any], revision: int = 0, title: str = "",
+                 height: int = 700, **analysis) -> dict[str, Any] | None:
+    """The editing mount, which is the only one that can send anything back.
+
+    Read-only views stay embedded documents: nothing they do needs Python, and a
+    rerun for a zoom is exactly what this design avoids. Editing is the one thing
+    that does need Python - the file is written there - so it gets the component.
+    """
+    payload = with_analysis(build(outlines, fallback_colours=colours, title=title),
+                            editable=editable, **analysis)
+    if not payload["layers"]:
+        st.info("This layout contains no drawable geometry.")
+        return None
+    for warning in payload["warnings"]:
+        st.warning(warning)
+    return mount_viewer(payload, height=height, key=key, revision=revision)
 
 
 def compare_panel(xor: dict[str, Any], outlines_a: dict[str, Any],
@@ -95,20 +118,23 @@ def compare_panel(xor: dict[str, Any], outlines_a: dict[str, Any],
 
 
 def workspace(request: dict[str, Any], render_view: Callable[[], None],
-              answer: Callable[[str], str], height: int = 720) -> None:
+              answer: Callable[[str], str], height: int = 720,
+              edit_bar: Callable[[Any], None] | None = None) -> None:
     """The expanded view: the drawing large and centred, the chatbot beside it.
 
     The layer panel is not a third column here - it lives inside the viewer, which
     keeps the toggles next to the drawing they affect and means switching a layer
     still costs no page reload.
     """
-    bar = st.columns([1, 5])
+    bar = st.columns([1, 3.4, 1.8] if edit_bar else [1, 5])
     if bar[0].button("← Back", key="ws_back", width="stretch"):
         clear_focus()
         st.rerun()
     bar[1].markdown(
         f"### {request.get('title') or request.get('a', '')}"
         + (f" → {request['b']}" if request.get("b") else ""))
+    if edit_bar:
+        edit_bar(bar[2])
 
     view, chat = st.columns([3.15, 1.15], gap="medium")
     with view:

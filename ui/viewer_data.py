@@ -45,6 +45,10 @@ def layer_payload(row: dict[str, Any], fallback: str | None = None) -> dict[str,
             "x": _round(shape["left_um"]),
             "y": _round(shape["bottom_um"]),
             "v": shape.get("vertices"),
+            # Present only when the layout was read for editing: which cell the
+            # shape lives in and its outline in that cell's own database units.
+            # An edit names this, never a screen position.
+            **({"id": shape["id"]} if shape.get("id") else {}),
         })
     labels = [{"t": lab["text"], "x": _round(lab["at_um"][0]), "y": _round(lab["at_um"][1])}
               for lab in row.get("labels") or []]
@@ -92,6 +96,47 @@ def build(outlines: dict[str, Any], fallback_colours: dict[str, str] | None = No
         "layers": layers,
         "defaultOn": primary or [layer["name"] for layer in layers],
         "warnings": outlines.get("warnings") or [],
+    }
+
+
+def editable_payload(outlines: dict[str, Any], layermap: dict[str, Any] | None,
+                     tech: dict[str, Any] | None = None) -> dict[str, Any]:
+    """What the editor needs beyond the drawing: where a new shape may go.
+
+    A layer the technology does not define has no layer number, so drawing on it
+    would produce a file whose layers mean nothing. The editor therefore offers the
+    technology's own layers and no others, and the grid choices come from the
+    database unit rather than from a list of round numbers.
+    """
+    dbu_nm = (outlines.get("dbu_um") or 0.001) * 1000
+    catalogue = []
+    for key, entry in sorted(((layermap or {}).get("by_key") or {}).items()):
+        catalogue.append({
+            "name": entry.get("technology_name") or f"layer_{key[0]}_{key[1]}",
+            "layer": key[0], "datatype": key[1],
+            "role": entry.get("role") or "unknown",
+            "colour": entry.get("fill_color") or "#8aa0b6",
+        })
+    drawn = {row["name"] for row in outlines.get("layers") or []}
+    # The grid the file can actually express, then the ones a designer works on.
+    steps = sorted({round(dbu_nm, 6), 0.5, 1.0, 5.0, 10.0} - {0.0})
+    # Measured figures, shown while drawing so the constraint is on screen rather
+    # than in a manual on another monitor. These are what this layout *is*, not what
+    # a rule deck says it must be - the wording in the editor has to keep that
+    # distinction, because the two are only the same on a layout that already passes.
+    rules = {}
+    for name, entry in ((tech or {}).get("parameters") or {}).items():
+        if (isinstance(entry, dict) and entry.get("available")
+                and isinstance(entry.get("value"), (int, float))
+                and entry.get("unit") == "nm"):
+            rules[name] = {"nm": entry["value"], "rule": entry.get("drm_rule")}
+    return {
+        "topCell": outlines.get("top_cell"),
+        "dbuNm": round(dbu_nm, 6),
+        "gridStepsNm": steps,
+        "layers": catalogue,
+        "drawnLayers": sorted(drawn),
+        "rulesNm": rules,
     }
 
 
@@ -268,7 +313,8 @@ def with_analysis(payload: dict[str, Any], drc: dict[str, Any] | None = None,
                   connectivity: dict[str, Any] | None = None,
                   pitch: dict[str, Any] | None = None,
                   hierarchy: dict[str, Any] | None = None,
-                  tree: dict[str, Any] | None = None) -> dict[str, Any]:
+                  tree: dict[str, Any] | None = None,
+                  editable: dict[str, Any] | None = None) -> dict[str, Any]:
     """Attach the analysis the viewer can act on.
 
     Everything here was already computed for the report. Sending it to the viewer
@@ -280,4 +326,8 @@ def with_analysis(payload: dict[str, Any], drc: dict[str, Any] | None = None,
     payload["tracks"] = tracks_payload(pitch)
     payload["tree"] = cells_payload(hierarchy, tree)
     payload["netsAvailable"] = bool(payload["nets"])
+    # Present only when the page can actually write a file back. A viewer that
+    # offers a drawing tool it cannot save is worse than one that offers none.
+    if editable:
+        payload["editable"] = editable
     return payload
