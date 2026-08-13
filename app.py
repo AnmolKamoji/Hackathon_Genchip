@@ -9,6 +9,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from ai.deterministic import answer as deterministic_answer
+from ai.compare import answer_pair
 from ai.deterministic import answer_comparison, answer_xor, is_comparison_question
 from ai.llm import ask_llm, generate_comparison, generate_review, provider_status
 from analyzer.comparison import compare_metadata
@@ -18,6 +19,7 @@ from analyzer.deck import load_deck, run as run_deck
 from analyzer.density import density_map
 from analyzer.diff import diff as structural_diff
 from analyzer.edit import EditError, apply_to_bytes, describe as describe_edits
+from analyzer.edit import grid_audit
 from analyzer.lvs import compare as lvs_compare
 from analyzer.netlist import default_recipe, extract as extract_netlist
 from analyzer.stack3d import build_slabs, load_stack3d, mesh as mesh_slabs
@@ -406,6 +408,18 @@ def process_diff(a_bytes: bytes, a_name: str, b_bytes: bytes, b_name: str,
 
 
 @st.cache_data(show_spinner=False)
+def process_grid(gds_bytes: bytes, filename: str, grid_nm: float = 1.0):
+    """Off-grid shapes, so "is B still on grid?" has an answer rather than a caveat."""
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / filename
+        path.write_bytes(gds_bytes)
+        try:
+            return grid_audit(path, grid_nm)
+        except Exception:
+            return None
+
+
+@st.cache_data(show_spinner=False)
 def process_tree(gds_bytes: bytes, filename: str):
     """Cell placements with their boxes, for the viewer's cell tree.
 
@@ -679,13 +693,56 @@ _layer_colours = {e["technology_name"]: e.get("fill_color")
                   for e in (layermap or {}).get("by_key", {}).values()
                   if e.get("fill_color")}
 
-def answer_for(question: str, metadata: dict, history: list | None = None) -> str:
+def pair_context(name_a: str, name_b: str, xor_detail: dict | None) -> dict:
+    """Everything the comparison chat can answer from, for one pair.
+
+    Assembled from the cached analyses the page has already run - nothing here reads
+    a file that has not been read. It exists so a question about the *pair* is never
+    answered from one file\'s metadata, which is the one mistake a comparison chat
+    can make that looks like an answer.
+    """
+    def side(name: str) -> dict:
+        index = _idx_of.get(name, 0)
+        upload = uploads[index]
+        data = file_bytes(upload)
+        metadata = dict(metadata_list[index])
+        outlines, _ = process_outlines(data, name, layermap, conn_stack)
+        classification, _ = process_classification(data, name, layermap, conn_stack,
+                                                   tuple(u.name for u in uploads))
+        drc, _ = process_drc(data, name, layermap, conn_stack)
+        if outlines:
+            metadata["outlines"] = outlines
+        if classification:
+            metadata["classification"] = classification
+            metadata["pitch"] = classification.get("pitch")
+        return {
+            "file": name,
+            "metadata": metadata,
+            "drc": drc,
+            "connectivity": metadata.get("connectivity"),
+            "netlist": process_netlist(data, name, layermap,
+                                       conn_stack or default_stack(layermap))[0],
+            "grid": process_grid(data, name, 1.0),
+        }
+
+    return {"xor": xor_detail or {}, "a": side(name_a), "b": side(name_b)}
+
+
+def answer_for(question: str, metadata: dict, history: list | None = None,
+               pair: dict | None = None) -> str:
     """Answer one question, deterministic first and the model only as a fallback.
 
     Shared by the page chat and the expanded workspace so both give the same answer
     to the same question - the alternative is two ladders that drift apart, and the
     user discovering that the big view is less accurate than the small one.
     """
+    # A pair context answers about *both* files. It is tried first and for every
+    # question, not only ones that look comparative: "did any pin move" names no
+    # comparison word and is unanswerable from one file.
+    if pair:
+        reply = answer_pair(pair, question)
+        if reply:
+            return reply
     if is_comparison_question(question) and _xor_for_chat is not None:
         reply = answer_xor(_xor_for_chat, question)
         if reply:
@@ -697,8 +754,25 @@ def answer_for(question: str, metadata: dict, history: list | None = None) -> st
     reply = deterministic_answer(metadata, question)
     if reply:
         return reply
-    context = ({"comparison": comparison}
-               if (comparison and is_comparison_question(question)) else metadata)
+    # What the model is given matters most when nothing deterministic matched. In a
+    # comparison, handing it one file's metadata is how "what changed?" gets answered
+    # from a single layout - so both sides go, and the XOR with them.
+    if pair:
+        context = {
+            "comparing": {"a": pair["a"].get("file"), "b": pair["b"].get("file")},
+            "difference": (pair.get("xor") or {}).get("summary"),
+            "layers_that_differ": [
+                {"layer": row["name"], "regions": row["xor"]["count"],
+                 "xor_area_um2": row["xor"]["area_um2"]}
+                for row in (pair.get("xor") or {}).get("layers", [])
+                if not row.get("identical")],
+            "a": pair["a"].get("metadata"),
+            "b": pair["b"].get("metadata"),
+        }
+    elif comparison and is_comparison_question(question):
+        context = {"comparison": comparison}
+    else:
+        context = metadata
     return ask_llm(context, question, history=history or [])
 
 
@@ -815,6 +889,21 @@ def _handle_edit_event(event: dict | None, upload, name: str) -> None:
 # scroll past. It reuses the same panels as the inline views: one viewer, one
 # answering path, so the big view cannot disagree with the small one.
 _focus = focus_request()
+if _focus and _focus.get("kind") == "compare":
+    # Computed before the workspace renders, because the chat beside the drawings
+    # needs it: a question about a difference answered from one file's metadata is
+    # the exact failure this tool exists to avoid. run_xor is cached, so this is the
+    # same result the comparison section below shows, not a second opinion.
+    _ws_res, _ws_err = run_xor(
+        tuple(u.name for u in uploads), tuple(file_bytes(u) for u in uploads),
+        layermap, st.session_state.get("xor_tol", 0.0), conn_stack)
+    if _ws_res:
+        for _ws_pair in _ws_res["pairs"]:
+            if _ws_pair["a"] == _focus.get("a") and _ws_pair["b"] == _focus.get("b"):
+                _xor_for_chat = _ws_pair.get("detail") or {
+                    "comparable": False, "reason": _ws_pair.get("reason", "unknown")}
+                break
+
 if _focus:
     def _render_focus() -> None:
         if _focus["kind"] == "compare":
@@ -953,9 +1042,12 @@ if _focus:
             if diff:
                 st.caption(f"Against the upload: {diff}")
 
+    _ws_pair_context = (pair_context(_focus["a"], _focus["b"], _xor_for_chat)
+                        if _focus.get("kind") == "compare" else None)
     workspace(_focus, _render_focus,
               lambda q: answer_for(q, _focus_meta,
-                                   history=st.session_state.get("ws_chat", [])[-6:]),
+                                   history=st.session_state.get("ws_chat", [])[-6:],
+                                   pair=_ws_pair_context),
               edit_bar=_edit_bar if _focus["kind"] == "layout" else None)
     st.stop()
 
@@ -1706,8 +1798,13 @@ if question:
         st.markdown(question)
 
     metadata = metadata_list[0]
+    # With two layouts open, the page chat answers about the pair as well - the
+    # comparison workspace should not be the only place that can say what changed.
+    _page_pair = (pair_context(uploads[0].name, uploads[1].name, _xor_for_chat)
+                  if len(uploads) == 2 else None)
     with st.chat_message("assistant"):
-        reply = answer_for(question, metadata, history=st.session_state.chat[:-1][-6:])
+        reply = answer_for(question, metadata, history=st.session_state.chat[:-1][-6:],
+                           pair=_page_pair)
         st.markdown(reply)
     st.session_state.chat.append({"role": "assistant", "content": reply})
 

@@ -481,6 +481,26 @@ def _off_grid(layout, dbu: float, grid_nm: float | None) -> dict[str, Any]:
     return bad
 
 
+def grid_audit(gds_path: str | Path, grid_nm: float = 1.0) -> dict[str, Any]:
+    """How much of a layout sits off a given design grid.
+
+    The same check the editor runs after a write, available on its own: a reviewer
+    comparing two revisions wants to know whether the new one introduced off-grid
+    geometry, and that is a property of each file rather than of the edit.
+    """
+    import klayout.db as db
+
+    layout = db.Layout()
+    layout.read(str(gds_path))
+    dbu = float(layout.dbu)
+    bad = _off_grid(layout, dbu, grid_nm)
+    return {"grid_nm": grid_nm,
+            "shapes": sum(bad.values()),
+            "layers": [{"layer": key, "shapes": count}
+                       for key, count in sorted(bad.items())],
+            "dbu_nm": round(dbu * 1000, 6)}
+
+
 def apply_edits(gds_path: str | Path, edits: list[dict[str, Any]],
                 out_path: str | Path | None = None,
                 layermap: dict[str, Any] | None = None,
