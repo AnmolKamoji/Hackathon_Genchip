@@ -271,7 +271,7 @@
       this.tab = keepTab;
       this.scale = view.scale; this.cx = view.cx; this.cy = view.cy;
       this.buildToolbar();
-      this.buildPanel();
+      if (!this.opts.noPanel) this.buildPanel();
       this.sync();
       this.draw();
     }
@@ -318,12 +318,17 @@
       this.swipeHandle.style.display = "none";
       stage.appendChild(this.swipeHandle);
 
-      this.panel = document.createElement("div");
-      this.panel.className = "gv-panel";
-      body.appendChild(this.panel);
+      // A viewer normally owns its layer panel. In the side-by-side comparison it
+      // does not: two panels listing the same layers is two places to keep in step,
+      // and the shared one belongs to neither drawing.
+      if (!this.opts.noPanel) {
+        this.panel = document.createElement("div");
+        this.panel.className = "gv-panel";
+        body.appendChild(this.panel);
+      }
 
       this.buildToolbar();
-      this.buildPanel();
+      if (!this.opts.noPanel) this.buildPanel();
       this.bind();
     }
 
@@ -464,6 +469,7 @@
 
     buildPanel() {
       const p = this.panel;
+      if (!p) return;
       p.innerHTML = "";
 
       // Tabs, because a review needs several different lists and stacking them all
@@ -507,6 +513,7 @@
     }
 
     renderPanel() {
+      if (!this.panel) return;
       for (const id in this.tabButtons) {
         this.tabButtons[id].classList.toggle("gv-on", this.tab === id);
       }
@@ -1574,7 +1581,7 @@
     }
 
     syncPanel() {
-      if (this.tab !== "layers" || !this.rowEls) { this.sync(); return; }
+      if (!this.panel || this.tab !== "layers" || !this.rowEls) { this.sync(); return; }
       for (const layer of this.A.layers) {
         const el = this.rowEls[layer.name];
         if (!el) continue;
@@ -1606,6 +1613,9 @@
     }
 
     renderInfo() {
+      // No info box without a panel: in the side-by-side comparison the viewers have
+      // neither, and a zoom would otherwise throw on the first pushHistory.
+      if (!this.info) return;
       const parts = [];
 
       if (this.activeMarker) {
@@ -2662,6 +2672,224 @@
       window.removeEventListener("keydown", this.keyHandler);
     }
   }
+
+
+  // ---------- the side-by-side comparison ------------------------------------
+  //
+  // Two drawings, one layer panel. The panel is the only thing they share: a
+  // checkbox writes into both viewers and redraws them, while zoom, pan, rulers and
+  // history stay per-viewer. Sharing the panel is the point - two lists of the same
+  // layers is two things to keep in step, and nobody compares layouts by ticking the
+  // same box twice.
+  //
+  // Layers are keyed by layer/datatype, not by name: two layers can share a display
+  // name, and the key has to be the thing the file actually stores.
+  class DualViewer {
+    constructor(root, payload, options) {
+      this.root = root;
+      this.data = payload;
+      this.opts = options || {};
+      this.filter = "";
+      root.innerHTML = "";
+      root.className = "gv-dual";
+
+      const names = payload.names || {};
+      this.halves = [];
+      for (const [side, label, name] of [["a", "A — Reference", names.a],
+                                         ["b", "B — Revision", names.b]]) {
+        const half = document.createElement("div");
+        half.className = "gv-half";
+        const title = document.createElement("div");
+        title.className = "gv-htitle";
+        title.innerHTML = `<b>${label}</b><span class="gv-dim">${name || ""}</span>`;
+        half.appendChild(title);
+        const stage = document.createElement("div");
+        stage.className = "gv-hstage";
+        half.appendChild(stage);
+        root.appendChild(half);
+        const viewer = new NS.Viewer(stage, payload[side], { noPanel: true });
+        this.halves.push({ side, viewer, name });
+      }
+
+      this.panel = document.createElement("div");
+      this.panel.className = "gv-panel gv-shared";
+      root.appendChild(this.panel);
+      this.buildPanel();
+    }
+
+    // The union of both layouts' layers. A layer in only one of them is listed once
+    // and controls the side that has it; the other side has nothing to hide.
+    layers() {
+      const out = new Map();
+      for (const { side, viewer } of this.halves) {
+        for (const layer of viewer.A.layers) {
+          const key = `${layer.layer}/${layer.datatype}`;
+          const entry = out.get(key) || {
+            key, name: layer.name, layer: layer.layer, datatype: layer.datatype,
+            colour: layer.colour, role: layer.role, sides: {}, count: 0,
+          };
+          entry.sides[side] = layer.name;
+          entry.count += layer.count || 0;
+          if (!entry.colour) entry.colour = layer.colour;
+          out.set(key, entry);
+        }
+      }
+      return [...out.values()].sort((x, y) => x.layer - y.layer || x.datatype - y.datatype);
+    }
+
+    isOn(entry) {
+      for (const { side, viewer } of this.halves) {
+        const name = entry.sides[side];
+        if (name && viewer.visible.has(name)) return true;
+      }
+      return false;
+    }
+
+    set(entry, on) {
+      for (const { side, viewer } of this.halves) {
+        const name = entry.sides[side];
+        if (!name) continue;                       // this layer is not in that file
+        if (on) viewer.visible.add(name);
+        else viewer.visible.delete(name);
+        viewer.solo = null;
+      }
+    }
+
+    // Toggling redraws; it never rebuilds a payload, reads a file or asks the page
+    // for anything. That is what keeps it instant and the two views in step.
+    apply(redraw) {
+      for (const { viewer } of this.halves) {
+        viewer.syncPanel();
+        if (redraw !== false) viewer.draw();
+      }
+      this.renderRows();
+    }
+
+    setAll(which) {
+      for (const entry of this.layers()) {
+        const on = which === "all" ? true
+                 : which === "none" ? false
+                 : entry.role !== "derived";       // "drawing" keeps the same meaning
+        this.set(entry, on);
+      }
+      this.apply();
+    }
+
+    buildPanel() {
+      const p = this.panel;
+      p.innerHTML = "";
+      const head = document.createElement("div");
+      head.className = "gv-phead";
+      head.innerHTML = `<span>Layers</span><span class="gv-count">${this.layers().length}</span>`;
+      p.appendChild(head);
+
+      const quick = document.createElement("div");
+      quick.className = "gv-quick";
+      p.appendChild(quick);
+      const button = (label, title, handler) => {
+        const b = document.createElement("button");
+        b.className = "gv-btn";
+        b.type = "button";
+        b.textContent = label;
+        b.title = title;
+        b.addEventListener("click", handler);
+        quick.appendChild(b);
+      };
+      button("All", "Show every layer in both", () => this.setAll("all"));
+      button("Drawing", "Only the layers with unique geometry, in both",
+             () => this.setAll("drawing"));
+      button("None", "Hide every layer in both", () => this.setAll("none"));
+
+      const search = document.createElement("input");
+      search.type = "search";
+      search.className = "gv-search";
+      search.placeholder = "Filter layers…";
+      search.value = this.filter;
+      // The filter changes which rows are listed and nothing else: a layer hidden by
+      // the search keeps whatever visibility it had.
+      search.addEventListener("input", () => {
+        this.filter = search.value.trim().toLowerCase();
+        this.renderRows();
+      });
+      p.appendChild(search);
+
+      this.rows = document.createElement("div");
+      this.rows.className = "gv-layers";
+      p.appendChild(this.rows);
+
+      const note = document.createElement("div");
+      note.className = "gv-hint";
+      note.style.padding = "8px 10px";
+      note.innerHTML = "One list, both drawings. Zoom, pan and rulers stay separate.";
+      p.appendChild(note);
+
+      this.renderRows();
+    }
+
+    renderRows() {
+      this.rows.innerHTML = "";
+      for (const entry of this.layers()) {
+        if (this.filter && !entry.name.toLowerCase().includes(this.filter) &&
+            !entry.key.includes(this.filter)) continue;
+        const row = document.createElement("div");
+        row.className = "gv-lrow";
+        row.dataset.key = entry.key;
+
+        const box = document.createElement("input");
+        box.type = "checkbox";
+        box.checked = this.isOn(entry);
+        box.addEventListener("change", () => { this.set(entry, box.checked); this.apply(); });
+        row.appendChild(box);
+
+        const swatch = document.createElement("input");
+        swatch.type = "color";
+        swatch.className = "gv-sw";
+        swatch.value = /^#[0-9a-f]{6}$/i.test(entry.colour || "") ? entry.colour : "#8aa0b6";
+        swatch.title = `${entry.name} colour, from the layer map`;
+        swatch.addEventListener("input", () => {
+          for (const { side, viewer } of this.halves) {
+            const name = entry.sides[side];
+            const layer = name && viewer.A.layers.find((l) => l.name === name);
+            if (layer) layer.colour = swatch.value;
+          }
+          entry.colour = swatch.value;
+          this.apply();
+        });
+        swatch.addEventListener("click", (e) => e.stopPropagation());
+        row.appendChild(swatch);
+
+        const name = document.createElement("span");
+        name.className = "gv-lname";
+        name.textContent = entry.name;
+        const only = !entry.sides.a ? " — only in B" : !entry.sides.b ? " — only in A" : "";
+        name.title = `${entry.key} · ${entry.count} shape(s)${only}`;
+        row.appendChild(name);
+
+        const key = document.createElement("span");
+        key.className = "gv-ld";
+        key.textContent = entry.key;
+        row.appendChild(key);
+
+        const mark = document.createElement("span");
+        mark.className = "gv-n";
+        mark.textContent = only ? (entry.sides.a ? "A" : "B") : "";
+        mark.title = only.trim();
+        row.appendChild(mark);
+
+        this.rows.appendChild(row);
+      }
+    }
+  }
+
+  NS.DualViewer = DualViewer;
+  NS.mountDual = function (rootId, payload, options) {
+    const root = document.getElementById(rootId);
+    if (!root) throw new Error("viewer root not found: " + rootId);
+    const dual = new DualViewer(root, payload, options);
+    NS.instances = NS.instances || {};
+    NS.instances[rootId] = dual;
+    return dual;
+  };
 
   NS.Viewer = Viewer;
   NS.mount = function (rootId, payload, options) {

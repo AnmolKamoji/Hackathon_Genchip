@@ -10,6 +10,7 @@ has not fetched it (`python -m playwright install chromium`).
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -1312,3 +1313,200 @@ def test_what_the_editor_previews_is_what_klayout_writes(epage, tmp_path):
         assert got == want, f"{row['name']} differs between the preview and the file"
     assert any(l["text"] == "ROUNDTRIP"
                for row in written["layers"] for l in row["labels"])
+
+
+# --- the side-by-side comparison: two drawings, one layer panel --------------
+
+@pytest.fixture(scope="module")
+def dual_doc():
+    from analyzer.xor_diff import xor_compare
+    from ui.viewer_data import build_comparison
+
+    layermap = load_lyp(default_layermap())
+    a = SAMPLES / "DCAP0_1_RT_4.gds"
+    b = SAMPLES / "DCAP0_2_RT_4.gds"
+    payload = build_comparison(
+        xor_compare(a, b, layermap),
+        build(shape_outlines(a, layermap), title=a.name),
+        build(shape_outlines(b, layermap), title=b.name),
+    )
+    payload["names"] = {"a": a.name, "b": b.name}
+    return document(payload, "gv", dual=True)
+
+
+@pytest.fixture
+def dpage(browser, dual_doc):
+    pg = browser.new_page(viewport={"width": 1600, "height": 820})
+    errors: list[str] = []
+    pg.on("pageerror", lambda e: errors.append(f"pageerror: {e}"))
+    pg.on("console", lambda m: errors.append(f"console.error: {m.text}")
+          if m.type == "error" else None)
+    pg.set_content(dual_doc)
+    pg.wait_for_function("() => window.GDSViewer && window.GDSViewer.instances.gv")
+    pg.wait_for_timeout(200)
+    yield pg
+    assert not errors, "\n".join(errors)
+    pg.close()
+
+
+def side(page, index, name):
+    return page.evaluate(
+        f"() => window.GDSViewer.instances.gv.halves[{index}].viewer.visible.has('{name}')")
+
+
+def scale(page, index):
+    return page.evaluate(
+        f"() => window.GDSViewer.instances.gv.halves[{index}].viewer.scale")
+
+
+def test_a_is_left_b_is_centre_and_the_panel_is_on_the_right(dpage):
+    halves = [dpage.locator(".gv-half").nth(i).bounding_box() for i in (0, 1)]
+    panel = dpage.locator(".gv-shared").bounding_box()
+    titles = dpage.locator(".gv-htitle").all_inner_texts()
+    assert "A — Reference" in titles[0] and "DCAP0_1_RT_4.gds" in titles[0]
+    assert "B — Revision" in titles[1] and "DCAP0_2_RT_4.gds" in titles[1]
+    assert halves[0]["x"] < halves[1]["x"] < panel["x"]
+    # The drawings get the space; the panel is clearly smaller than either.
+    assert abs(halves[0]["width"] - halves[1]["width"]) < 2
+    assert panel["width"] < halves[0]["width"] / 2
+    assert halves[0]["x"] + halves[0]["width"] <= halves[1]["x"] + 1
+
+
+def test_there_is_exactly_one_layer_panel(dpage):
+    assert dpage.locator(".gv-shared").count() == 1
+    assert dpage.locator(".gv-half .gv-panel").count() == 0
+    assert dpage.locator(".gv-lrow").count() == dpage.locator(".gv-shared .gv-lrow").count()
+
+
+def test_one_checkbox_hides_a_layer_in_both_drawings(dpage):
+    row = dpage.locator(".gv-shared .gv-lrow", has_text="NPOLY").first
+    box = row.locator("input[type=checkbox]")
+    assert side(dpage, 0, "NPOLY") and side(dpage, 1, "NPOLY")
+    box.uncheck()
+    dpage.wait_for_timeout(150)
+    assert not side(dpage, 0, "NPOLY") and not side(dpage, 1, "NPOLY")
+    box.check()
+    dpage.wait_for_timeout(150)
+    assert side(dpage, 0, "NPOLY") and side(dpage, 1, "NPOLY")
+
+
+@pytest.mark.parametrize("button,expected", [("None", 0), ("All", "every")])
+def test_all_and_none_act_on_both(dpage, button, expected):
+    dpage.locator(".gv-shared .gv-btn", has_text=button).click()
+    dpage.wait_for_timeout(200)
+    sizes = [dpage.evaluate(f"() => window.GDSViewer.instances.gv.halves[{i}].viewer.visible.size")
+             for i in (0, 1)]
+    if expected == 0:
+        assert sizes == [0, 0]
+    else:
+        counts = [dpage.evaluate(f"() => window.GDSViewer.instances.gv.halves[{i}].viewer.A.layers.length")
+                  for i in (0, 1)]
+        assert sizes == counts
+
+
+def test_drawing_acts_on_both_and_keeps_its_meaning(dpage):
+    dpage.locator(".gv-shared .gv-btn", has_text="Drawing").click()
+    dpage.wait_for_timeout(200)
+    for index in (0, 1):
+        derived_on = dpage.evaluate(f"""() => {{
+          const v = window.GDSViewer.instances.gv.halves[{index}].viewer;
+          return v.A.layers.filter(l => l.role === 'derived' && v.visible.has(l.name)).length;
+        }}""")
+        assert derived_on == 0
+
+
+def test_zoom_and_pan_stay_independent(dpage):
+    before = [scale(dpage, 0), scale(dpage, 1)]
+    dpage.evaluate("() => window.GDSViewer.instances.gv.halves[0].viewer.zoomBy(2.5)")
+    dpage.wait_for_timeout(150)
+    assert scale(dpage, 0) > before[0]
+    assert scale(dpage, 1) == before[1], "zooming A moved B"
+    dpage.evaluate("""() => { const v = window.GDSViewer.instances.gv.halves[1].viewer;
+      v.cx += 0.05; v.draw(); }""")
+    dpage.wait_for_timeout(150)
+    assert scale(dpage, 0) != scale(dpage, 1)
+
+
+def test_the_filter_hides_rows_without_touching_visibility(dpage):
+    row = dpage.locator(".gv-shared .gv-lrow", has_text="NPOLY").first
+    row.locator("input[type=checkbox]").uncheck()
+    dpage.wait_for_timeout(150)
+    search = dpage.locator(".gv-shared .gv-search")
+    search.fill("M1")
+    dpage.wait_for_timeout(200)
+    assert dpage.locator(".gv-shared .gv-lrow", has_text="NPOLY").count() == 0
+    assert not side(dpage, 0, "NPOLY")            # still hidden, not reset
+    search.fill("")
+    dpage.wait_for_timeout(200)
+    box = (dpage.locator(".gv-shared .gv-lrow", has_text="NPOLY").first
+           .locator("input[type=checkbox]"))
+    assert box.is_checked() is False, "clearing the filter reset the checkbox"
+
+
+def test_layers_are_keyed_by_layer_and_datatype(dpage):
+    """Two layers can share a display name; the key has to be what the file stores."""
+    keys = dpage.evaluate("() => window.GDSViewer.instances.gv.layers().map(l => l.key)")
+    assert len(keys) == len(set(keys))
+    assert all("/" in key for key in keys)
+    rows = dpage.locator(".gv-shared .gv-lrow").count()
+    assert rows == len(keys)
+
+
+def test_the_panel_keeps_the_layer_map_colours(dpage):
+    swatches = dpage.evaluate("""() => Array.from(
+        document.querySelectorAll('.gv-shared .gv-lrow input[type=color]')).map(i => i.value)""")
+    colours = dpage.evaluate("""() => window.GDSViewer.instances.gv.halves[0].viewer.A.layers
+        .map(l => (l.colour || '').toLowerCase())""")
+    assert any(colour in swatches for colour in colours if colour)
+
+
+# --- a layer that exists in only one of the two ------------------------------
+
+@pytest.fixture(scope="module")
+def lopsided_doc(tmp_path_factory):
+    """B has a layer A does not. One row, controlling the side that has it."""
+    from analyzer.edit import apply_edits
+    from analyzer.xor_diff import xor_compare
+    from ui.viewer_data import build_comparison
+
+    layermap = load_lyp(default_layermap())
+    a = SAMPLES / "DCAP0_1_RT_4.gds"
+    b = tmp_path_factory.mktemp("lopsided") / "extra.gds"
+    apply_edits(a, [{"op": "insert", "layer": "M2",
+                     "points": [[0.2, 0.2], [0.2, 0.24], [0.26, 0.24], [0.26, 0.2]]}],
+                b, layermap=layermap)
+    payload = build_comparison(
+        xor_compare(a, b, layermap),
+        build(shape_outlines(a, layermap), title=a.name),
+        build(shape_outlines(b, layermap), title="extra.gds"),
+    )
+    payload["names"] = {"a": a.name, "b": "extra.gds"}
+    return document(payload, "gv", dual=True)
+
+
+def test_a_layer_in_only_one_file_gets_one_row_and_no_errors(browser, lopsided_doc):
+    pg = browser.new_page(viewport={"width": 1600, "height": 820})
+    errors: list[str] = []
+    pg.on("pageerror", lambda e: errors.append(str(e)))
+    pg.set_content(lopsided_doc)
+    pg.wait_for_function("() => window.GDSViewer && window.GDSViewer.instances.gv")
+    pg.wait_for_timeout(200)
+
+    # "M2" also matches M2-TRACK-GUIDE, so match the row whose name is exactly M2.
+    rows = pg.locator(".gv-shared .gv-lrow").filter(
+        has=pg.locator(".gv-lname", has_text=re.compile(r"^M2$")))
+    assert rows.count() == 1, f"M2 should appear once, got {rows.all_inner_texts()}"
+    only = pg.evaluate("""() => { const d = window.GDSViewer.instances.gv;
+      const e = d.layers().find(l => l.name === 'M2');
+      return {inA: !!e.sides.a, inB: !!e.sides.b}; }""")
+    assert only == {"inA": False, "inB": True}
+
+    row = rows.first
+    row.locator("input[type=checkbox]").uncheck()
+    pg.wait_for_timeout(150)
+    assert not pg.evaluate("() => window.GDSViewer.instances.gv.halves[1].viewer.visible.has('M2')")
+    row.locator("input[type=checkbox]").check()
+    pg.wait_for_timeout(150)
+    assert pg.evaluate("() => window.GDSViewer.instances.gv.halves[1].viewer.visible.has('M2')")
+    assert not errors, errors
+    pg.close()

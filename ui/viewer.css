@@ -534,3 +534,43 @@ kbd {
 .gv-mitem:hover:not(:disabled) { background: #1b2735; }
 .gv-mitem:disabled { opacity: .4; cursor: default; }
 .gv-mitem .gv-dim { font-size: 10.5px; text-align: right; max-width: 150px; }
+
+/* ---- side-by-side comparison: two drawings, one layer panel ---- */
+
+.gv-dual {
+  display: flex;
+  height: 100vh;
+  gap: 1px;
+  background: var(--gv-line);
+}
+
+.gv-half {
+  flex: 1 1 0;
+  min-width: 0;                 /* without this a wide canvas refuses to shrink */
+  display: flex;
+  flex-direction: column;
+  background: var(--gv-bg);
+}
+
+.gv-htitle {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--gv-line);
+}
+.gv-htitle .gv-dim { font: 10.5px ui-monospace, monospace; }
+
+.gv-hstage { flex: 1 1 auto; min-height: 0; }
+.gv-hstage.gv-root { height: 100%; border: 0; border-radius: 0; }
+
+/* The shared panel: narrower than either drawing, and the drawings get the rest. */
+.gv-shared { flex: 0 0 232px; border-left: 1px solid var(--gv-line); }
+
+/* Too narrow to stand three abreast: stack the drawings, keep the panel beside. */
+@media (max-width: 900px) {
+  .gv-dual { flex-wrap: wrap; height: auto; min-height: 100vh; }
+  .gv-half { flex: 1 1 100%; min-height: 46vh; }
+  .gv-shared { flex: 1 1 100%; border-left: 0; border-top: 1px solid var(--gv-line); }
+}

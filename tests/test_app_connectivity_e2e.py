@@ -257,17 +257,43 @@ def test_the_expanded_comparison_opens_on_the_chosen_pair(run_app):
 
 # --- the tool bench ---------------------------------------------------------
 
-def _tool(at, name):
-    """Open one tool. Only the chosen one runs, so each test selects its own."""
-    return at.radio(key="tool_open").set_value(name).run()
+def _tool(at, name, file=None):
+    """Open one tool the way the viewer's menu does: by asking for it.
+
+    There is no tool selector on the page any more - the menu inside the viewer is
+    the only way in, and it sets exactly this.
+    """
+    at.session_state["tool_open"] = name
+    if file:
+        at.session_state["tool_file"] = file
+    return at.run()
 
 
-def test_the_tools_section_offers_every_tool(run_app):
+def test_no_tool_is_on_the_page_until_one_is_opened(run_app):
+    """The tools live in the viewer's menu; the page shows one only while in use."""
     at = run_app(["AN2D1_2_RT_4.gds"])
-    options = at.radio(key="tool_open").options
-    for name in ("Technology", "DRC", "LVS", "Netlist", "2.5D view", "Density map",
-                 "Diff", "Browse shapes", "Browse instances"):
-        assert name in options, f"the {name} tool is missing"
+    assert not at.exception
+    headings = " ".join(m.value for m in at.markdown if m.value)
+    for name in ("Netlist —", "LVS —", "Density map —"):
+        assert name not in headings
+    assert "tool_open" not in at.session_state
+
+
+@pytest.mark.parametrize("name", ["Technology", "DRC", "LVS", "Netlist", "2.5D view",
+                                  "Density map", "Diff", "Browse shapes",
+                                  "Browse instances"])
+def test_every_tool_opens_and_renders(run_app, name):
+    at = _tool(run_app(["AN2D1_2_RT_4.gds"]), name)
+    assert not at.exception, [e.value for e in at.exception]
+    headings = " ".join(m.value for m in at.markdown if m.value)
+    assert f"{name} — AN2D1_2_RT_4.gds" in headings
+
+
+def test_an_open_tool_can_be_closed_again(run_app):
+    at = _tool(run_app(["AN2D1_2_RT_4.gds"]), "Netlist")
+    assert any("Netlist —" in (m.value or "") for m in at.markdown)
+    at = at.button(key="tool_close_AN2D1_2_RT_4.gds").click().run()
+    assert not any("Netlist —" in (m.value or "") for m in at.markdown)
 
 
 def test_the_netlist_tool_extracts_devices_without_any_extra_input(run_app):
@@ -318,27 +344,24 @@ def test_browse_instances_says_a_flat_cell_has_none(run_app):
 
 # --- the comparison is side by side -----------------------------------------
 
-def test_the_comparison_shows_a_on_the_left_and_b_on_the_right(run_app):
+def test_the_comparison_renders_for_two_different_layouts(run_app):
+    """A on the left, B in the middle and one shared layer panel on the right all
+    live inside the viewer's own frame, so the arrangement itself is asserted in
+    tests/test_viewer_browser.py. What belongs here is that the section renders and
+    still offers the overlay."""
     at = run_app(["DCAP0_1_RT_4.gds", "DCAP0_2_RT_4.gds"])
-    labels = [m.value for m in at.markdown if m.value and "—" in m.value]
-    reference = next((l for l in labels if "A — Reference" in l), None)
-    revision = next((l for l in labels if "B — Revision" in l), None)
-    assert reference and revision, "the two viewers are not labelled A and B"
-    # A is rendered before B, which is what puts it on the left of the row.
-    order = [m.value for m in at.markdown if m.value]
-    assert order.index(reference) < order.index(revision)
-    # Each label carries its own filename.
-    assert "DCAP0_1_RT_4.gds" in reference
-    assert "DCAP0_2_RT_4.gds" in revision
+    assert not at.exception, [e.value for e in at.exception]
+    assert any("Overlay the two" in (e.label or "") for e in at.expander)
+    assert any("differing region" in (m.value or "") for m in at.markdown)
 
 
-def test_identical_uploads_still_render_both_sides(run_app):
-    """Nothing differs, so the panel must still show two viewers rather than none."""
+def test_identical_uploads_still_render_the_pair(run_app):
+    """Nothing differs, so the section must still show the two layouts rather than
+    an empty space where they were."""
     at = run_app(["DCAP0_1_RT_4.gds", "DCAP0_1_RT_4.gds"])
     assert not at.exception
-    labels = [m.value for m in at.markdown if m.value]
-    assert any("A — Reference" in l for l in labels)
-    assert any("B — Revision" in l for l in labels)
+    assert any("Overlay the two" in (e.label or "") for e in at.expander)
+    assert any("Identical" in (m.value or "") for m in at.markdown)
 
 
 def test_the_overlay_is_kept_below_the_pair(run_app):

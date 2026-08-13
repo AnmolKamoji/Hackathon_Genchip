@@ -137,15 +137,12 @@ def compare_panel(xor: dict[str, Any], outlines_a: dict[str, Any],
         render_viewer(payload, height=height, key=key)
         return
 
-    # Equal columns, so the two drawings are the same size and can be read against
-    # each other. Streamlit stacks columns itself when the viewport is too narrow.
-    left, right = st.columns(2, gap="small")
-    with left:
-        st.markdown(f"**A — Reference** · `{name_a}`")
-        render_viewer(a_payload, height=height, key=f"{key}_a")
-    with right:
-        st.markdown(f"**B — Revision** · `{name_b}`")
-        render_viewer(b_payload, height=height, key=f"{key}_b")
+    # A on the left, B in the middle, one layer panel on the right - all in a single
+    # frame. The panel is shared, so a checkbox hides that layer in both drawings at
+    # once; zoom, pan and rulers stay per-drawing. Splitting them across two frames
+    # would put a Python round trip behind every checkbox, and the rerun would throw
+    # away both zooms.
+    render_viewer(payload, height=height, key=f"{key}_pair", dual=True)
 
     with st.expander("Overlay the two — A+B, XOR, wipe and blink in one view"):
         render_viewer(payload, height=height, key=key)

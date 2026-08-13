@@ -44,8 +44,15 @@ def assets() -> tuple[str, str]:
     return js, _CSS.read_text(encoding="utf-8")
 
 
-def document(payload: dict[str, Any], element_id: str = "gv") -> str:
-    """The full HTML document for one viewer instance, payload included."""
+def document(payload: dict[str, Any], element_id: str = "gv",
+             dual: bool = False) -> str:
+    """The full HTML document for one viewer instance, payload included.
+
+    `dual` mounts the side-by-side comparison: two drawings and one shared layer
+    panel in a single document. They share a frame because sharing the panel across
+    two iframes would mean a round trip through Python for every checkbox - and a
+    rerun would throw away the zoom in both.
+    """
     js, css = assets()
     data = json.dumps(payload, separators=(",", ":"), allow_nan=False)
     # The payload goes in a JSON script block rather than inline JavaScript, and
@@ -63,7 +70,7 @@ def document(payload: dict[str, Any], element_id: str = "gv") -> str:
 (function () {{
   var el = document.getElementById({json.dumps(element_id + "-data")});
   var payload = JSON.parse(el.textContent);
-  window.GDSViewer.mount({json.dumps(element_id)}, payload);
+  window.GDSViewer.{"mountDual" if dual else "mount"}({json.dumps(element_id)}, payload);
 }})();
 </script>
 </body></html>"""
@@ -138,14 +145,15 @@ def _signature() -> str:
     return hashlib.sha256((js + css).encode("utf-8")).hexdigest()[:16]
 
 
-def render(payload: dict[str, Any], height: int = 620, key: str = "gv") -> None:
+def render(payload: dict[str, Any], height: int = 620, key: str = "gv",
+           dual: bool = False) -> None:
     """Draw the viewer at the given height. Nothing comes back from it.
 
     `st.iframe` is the current name; `components.v1.html` is deprecated and due for
     removal, but is kept as the fallback so the app still runs on the older
     Streamlit a user may already have installed.
     """
-    doc = document(payload, element_id=key)
+    doc = document(payload, element_id=key, dual=dual)
     embed = getattr(st, "iframe", None)
     if callable(embed):
         # st.iframe takes the HTML as `src` and has no `scrolling` argument - the

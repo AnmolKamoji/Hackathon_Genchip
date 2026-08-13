@@ -741,7 +741,7 @@ TOOL_BY_ID = {"technology": "Technology", "drc": "DRC", "lvs": "LVS",
               "instances": "Browse instances"}
 
 
-def _handle_tool_event(event: dict | None) -> None:
+def _handle_tool_event(event: dict | None, from_file: str | None = None) -> None:
     """Open the tool the viewer's menu asked for.
 
     The nonce guard matters here for the same reason it does for edits: a component
@@ -760,6 +760,8 @@ def _handle_tool_event(event: dict | None) -> None:
         # key be written after that widget has been created in the same run, and the
         # viewer that raises this event is rendered below the selector.
         st.session_state["tool_request"] = wanted
+        if from_file:
+            st.session_state["tool_request_file"] = from_file
         st.rerun()
 
 
@@ -959,205 +961,219 @@ if _focus:
 
 
 # --- the tool bench ----------------------------------------------------------
-# Everything KLayout puts under its Tools menu, in one place. A tool that needs an
-# input the layout cannot supply names the input and shows its format instead of
-# falling back on a guess.
-st.markdown(section("Tools"), unsafe_allow_html=True)
-
-_tool_names = [u.name for u in uploads]
-_tool_file = (st.selectbox("Layout to run these on", _tool_names, key="tool_file")
-              if len(_tool_names) > 1 else _tool_names[0])
-_tool_idx = _idx_of.get(_tool_file, 0)
-_tool_bytes = file_bytes(uploads[_tool_idx])
-_tool_meta = metadata_list[_tool_idx]
-
-# A selector rather than st.tabs: the viewer's tool menu asks for a specific tool,
-# and a tab strip cannot be opened from code.
+# Opened from the viewer's "More tools" menu and from nowhere else. There is no
+# permanent section for it: a row of tools sitting on the page whether or not
+# anyone wants one is exactly the clutter the menu exists to remove.
+#
+# A tool that needs an input the layout cannot supply names the input and shows its
+# format instead of falling back on a guess.
 _requested = st.session_state.pop("tool_request", None)
 if _requested in TOOL_TABS:
-    # Setting the widget's key *before* the widget exists is how a selection made
-    # elsewhere - here, the viewer's tool menu - becomes the one it opens on.
     st.session_state["tool_open"] = _requested
-_open = st.session_state.get("tool_open") or TOOL_TABS[0]
-_chosen = st.radio("Tool", TOOL_TABS,
-                   index=TOOL_TABS.index(_open) if _open in TOOL_TABS else 0,
-                   horizontal=True, key="tool_open", label_visibility="collapsed")
+    _from_file = st.session_state.pop("tool_request_file", None)
+    if _from_file:
+        st.session_state["tool_file"] = _from_file
 
 
-# Only the chosen tool's block runs. `st.tabs` renders every tab whether or not it
-# is open, which for tools that each read the layout means nine analyses per page
-# load; this way it is one.
 
-if _chosen == "Technology":
-    st.markdown("**What is loaded, and what each input unlocks.**")
-    toolbench.technology_panel({
-        "layermap": {"loaded": bool(layermap),
-                     "source": (lyp_upload.name if lyp_upload else
-                                "Titan_layer_properties.lyp (bundled)")},
-        "stack": {"loaded": bool(conn_stack),
-                  "source": (stack_upload.name if stack_upload
-                             else (default_stack(layermap) or {}).get("source", "bundled"))},
-        "recipe": {"loaded": bool(st.session_state.get("device_recipe")),
-                   "source": st.session_state.get("device_recipe_name") or
-                             "proposed from the layer map"},
-        "deck": {"loaded": bool(st.session_state.get("deck_file")),
-                 "source": st.session_state.get("deck_name") or "—"},
-        "schematic": {"loaded": bool(st.session_state.get("schematic_file")),
-                      "source": st.session_state.get("schematic_name") or "—"},
-        "stack3d": {"loaded": bool(st.session_state.get("stack3d_file")),
-                    "source": st.session_state.get("stack3d_name") or "—"},
-        "drm": {"loaded": bool(load_rules()),
-                "source": "data/genchip_drm_rules.json" if load_rules() else "not present"},
-    })
-    st.markdown("**The proposed device recipe** — what the netlist and LVS use unless "
-                "you replace it.")
-    st.json(default_recipe(layermap, conn_stack or default_stack(layermap)))
+def tool_panel(for_file: str) -> None:
+    """The open tool, if it was opened from this layout's viewer.
 
-if _chosen == "DRC":
-    st.markdown("**The bundled catalogue** — the rules transcribed from the design "
-                "rule manual in this repository.")
-    _bundled_drc, _bundled_error = process_drc(_tool_bytes, _tool_file, layermap, conn_stack)
-    if _bundled_error:
-        st.error(_bundled_error)
-    elif _bundled_drc and _bundled_drc.get("available") is False:
-        st.info(f"**Unavailable.** {_bundled_drc['reason']}")
-    elif _bundled_drc:
-        _s = _bundled_drc["summary"]
-        _c = st.columns(4)
-        _c[0].metric("Rules checked", _s["rules_checked"])
-        _c[1].metric("Violations", _s["violation"])
-        _c[2].metric("Passed", _s["pass"])
-        _c[3].metric("Not checked", _s["not checked"])
-        st.caption(f"The manual has {_s['rules_in_manual']} rules; "
-                   f"{_s['rules_not_checked']} of them need information a .gds and "
-                   ".lyp do not carry.")
-    st.divider()
-    st.markdown("**Your own deck** — any technology, run with the same engine.")
-    _deck_upload = st.file_uploader("Design rule deck (.json)", type=["json"],
-                                    key="deck_upload")
-    if _deck_upload is not None:
-        st.session_state["deck_file"] = _deck_upload.getvalue()
-        st.session_state["deck_name"] = _deck_upload.name
-    _deck_bytes = st.session_state.get("deck_file")
-    _deck_result = _deck = None
-    if _deck_bytes:
-        _deck_result, _deck, _deck_error = process_deck(
-            _tool_bytes, _tool_file, layermap, _deck_bytes,
-            st.session_state.get("deck_name", "deck.json"))
-        if _deck_error:
-            st.error(_deck_error)
-    toolbench.deck_panel(_deck_result, _deck, lambda: None)
+    Nothing renders when no tool is open, which is the point: the tools live in the
+    viewer's menu, and the page shows one only while it is being used.
+    """
+    chosen = st.session_state.get("tool_open")
+    if not chosen or (st.session_state.get("tool_file") or for_file) != for_file:
+        return
+    bar = st.columns([5, 1.1])
+    bar[0].markdown(section(f"{chosen} — {for_file}"), unsafe_allow_html=True)
+    if bar[1].button("✕ Close", key=f"tool_close_{for_file}", width="stretch",
+                     help="Close this tool. Reopen it from More tools in the viewer."):
+        st.session_state.pop("tool_open", None)
+        st.rerun()
+    render_tool(chosen, for_file)
 
-if _chosen == "LVS":
-    _schematic_upload = st.file_uploader(
-        "Schematic netlist (SPICE / CDL)", type=["cir", "sp", "spice", "cdl", "net", "txt"],
-        key="schematic_upload")
-    if _schematic_upload is not None:
-        st.session_state["schematic_file"] = _schematic_upload.getvalue()
-        st.session_state["schematic_name"] = _schematic_upload.name
-    _schematic_bytes = st.session_state.get("schematic_file")
-    if not _schematic_bytes:
-        toolbench.lvs_panel(None, lambda: None)
-    else:
-        _lvs, _lvs_error = process_lvs(
-            _tool_bytes, _tool_file, layermap, conn_stack or default_stack(layermap),
-            _schematic_bytes, st.session_state.get("schematic_name", "schematic.cir"),
+
+def render_tool(chosen: str, tool_file: str) -> None:
+    """Render one tool, under the viewer whose menu asked for it.
+
+    A function rather than a section, because where it appears matters: the menu
+    says a tool opens below the drawing, and a tool that opened three screens away
+    would be a menu that lies.
+    """
+    tool_names = [u.name for u in uploads]
+    if tool_file not in tool_names:
+        tool_file = tool_names[0]
+    tool_idx = _idx_of.get(tool_file, 0)
+    tool_bytes = file_bytes(uploads[tool_idx])
+    tool_meta = metadata_list[tool_idx]
+
+    if chosen == "Technology":
+        st.markdown("**What is loaded, and what each input unlocks.**")
+        toolbench.technology_panel({
+            "layermap": {"loaded": bool(layermap),
+                         "source": (lyp_upload.name if lyp_upload else
+                                    "Titan_layer_properties.lyp (bundled)")},
+            "stack": {"loaded": bool(conn_stack),
+                      "source": (stack_upload.name if stack_upload
+                                 else (default_stack(layermap) or {}).get("source", "bundled"))},
+            "recipe": {"loaded": bool(st.session_state.get("device_recipe")),
+                       "source": st.session_state.get("device_recipe_name") or
+                                 "proposed from the layer map"},
+            "deck": {"loaded": bool(st.session_state.get("deck_file")),
+                     "source": st.session_state.get("deck_name") or "—"},
+            "schematic": {"loaded": bool(st.session_state.get("schematic_file")),
+                          "source": st.session_state.get("schematic_name") or "—"},
+            "stack3d": {"loaded": bool(st.session_state.get("stack3d_file")),
+                        "source": st.session_state.get("stack3d_name") or "—"},
+            "drm": {"loaded": bool(load_rules()),
+                    "source": "data/genchip_drm_rules.json" if load_rules() else "not present"},
+        })
+        st.markdown("**The proposed device recipe** — what the netlist and LVS use unless "
+                    "you replace it.")
+        st.json(default_recipe(layermap, conn_stack or default_stack(layermap)))
+
+    if chosen == "DRC":
+        st.markdown("**The bundled catalogue** — the rules transcribed from the design "
+                    "rule manual in this repository.")
+        _bundled_drc, _bundled_error = process_drc(tool_bytes, tool_file, layermap, conn_stack)
+        if _bundled_error:
+            st.error(_bundled_error)
+        elif _bundled_drc and _bundled_drc.get("available") is False:
+            st.info(f"**Unavailable.** {_bundled_drc['reason']}")
+        elif _bundled_drc:
+            _s = _bundled_drc["summary"]
+            _c = st.columns(4)
+            _c[0].metric("Rules checked", _s["rules_checked"])
+            _c[1].metric("Violations", _s["violation"])
+            _c[2].metric("Passed", _s["pass"])
+            _c[3].metric("Not checked", _s["not checked"])
+            st.caption(f"The manual has {_s['rules_in_manual']} rules; "
+                       f"{_s['rules_not_checked']} of them need information a .gds and "
+                       ".lyp do not carry.")
+        st.divider()
+        st.markdown("**Your own deck** — any technology, run with the same engine.")
+        _deck_upload = st.file_uploader("Design rule deck (.json)", type=["json"],
+                                        key="deck_upload")
+        if _deck_upload is not None:
+            st.session_state["deck_file"] = _deck_upload.getvalue()
+            st.session_state["deck_name"] = _deck_upload.name
+        _deck_bytes = st.session_state.get("deck_file")
+        _deck_result = _deck = None
+        if _deck_bytes:
+            _deck_result, _deck, _deck_error = process_deck(
+                tool_bytes, tool_file, layermap, _deck_bytes,
+                st.session_state.get("deck_name", "deck.json"))
+            if _deck_error:
+                st.error(_deck_error)
+        toolbench.deck_panel(_deck_result, _deck, lambda: None)
+
+    if chosen == "LVS":
+        _schematic_upload = st.file_uploader(
+            "Schematic netlist (SPICE / CDL)", type=["cir", "sp", "spice", "cdl", "net", "txt"],
+            key="schematic_upload")
+        if _schematic_upload is not None:
+            st.session_state["schematic_file"] = _schematic_upload.getvalue()
+            st.session_state["schematic_name"] = _schematic_upload.name
+        _schematic_bytes = st.session_state.get("schematic_file")
+        if not _schematic_bytes:
+            toolbench.lvs_panel(None, lambda: None)
+        else:
+            _lvs, _lvs_error = process_lvs(
+                tool_bytes, tool_file, layermap, conn_stack or default_stack(layermap),
+                _schematic_bytes, st.session_state.get("schematic_name", "schematic.cir"),
+                st.session_state.get("device_recipe"))
+            if _lvs_error:
+                st.error(f"LVS could not run: {_lvs_error}")
+            else:
+                toolbench.lvs_panel(_lvs, lambda: None)
+
+    if chosen == "Netlist":
+        _netlist, _netlist_error = process_netlist(
+            tool_bytes, tool_file, layermap, conn_stack or default_stack(layermap),
             st.session_state.get("device_recipe"))
-        if _lvs_error:
-            st.error(f"LVS could not run: {_lvs_error}")
+        if _netlist_error:
+            st.error(f"The netlist could not be extracted: {_netlist_error}")
         else:
-            toolbench.lvs_panel(_lvs, lambda: None)
+            toolbench.netlist_panel(_netlist, Path(tool_file).stem)
 
-if _chosen == "Netlist":
-    _netlist, _netlist_error = process_netlist(
-        _tool_bytes, _tool_file, layermap, conn_stack or default_stack(layermap),
-        st.session_state.get("device_recipe"))
-    if _netlist_error:
-        st.error(f"The netlist could not be extracted: {_netlist_error}")
-    else:
-        toolbench.netlist_panel(_netlist, Path(_tool_file).stem)
-
-if _chosen == "2.5D view":
-    _stack3d_upload = st.file_uploader("Layer stack for the 2.5D view (.json)",
-                                       type=["json"], key="stack3d_upload")
-    if _stack3d_upload is not None:
-        st.session_state["stack3d_file"] = _stack3d_upload.getvalue()
-        st.session_state["stack3d_name"] = _stack3d_upload.name
-    _stack3d_bytes = st.session_state.get("stack3d_file")
-    if not _stack3d_bytes:
-        toolbench.stack3d_panel(None, None, lambda: None)
-    else:
-        _slabs, _meshes, _stack3d_error = process_stack3d(
-            _tool_bytes, _tool_file, layermap, _stack3d_bytes,
-            st.session_state.get("stack3d_name", "stack3d.json"))
-        if _stack3d_error:
-            st.error(_stack3d_error)
+    if chosen == "2.5D view":
+        _stack3d_upload = st.file_uploader("Layer stack for the 2.5D view (.json)",
+                                           type=["json"], key="stack3d_upload")
+        if _stack3d_upload is not None:
+            st.session_state["stack3d_file"] = _stack3d_upload.getvalue()
+            st.session_state["stack3d_name"] = _stack3d_upload.name
+        _stack3d_bytes = st.session_state.get("stack3d_file")
+        if not _stack3d_bytes:
+            toolbench.stack3d_panel(None, None, lambda: None)
         else:
-            toolbench.stack3d_panel(_slabs, stack_3d(_meshes or [],
-                                                     (_slabs or {}).get("height_nm", 0)),
-                                    lambda: None)
+            _slabs, _meshes, _stack3d_error = process_stack3d(
+                tool_bytes, tool_file, layermap, _stack3d_bytes,
+                st.session_state.get("stack3d_name", "stack3d.json"))
+            if _stack3d_error:
+                st.error(_stack3d_error)
+            else:
+                toolbench.stack3d_panel(_slabs, stack_3d(_meshes or [],
+                                                         (_slabs or {}).get("height_nm", 0)),
+                                        lambda: None)
 
-if _chosen == "Density map":
-    _outlines_for_density, _ = process_outlines(_tool_bytes, _tool_file, layermap, conn_stack)
-    _layer_names = [row["name"] for row in (_outlines_for_density or {}).get("layers", [])]
-    _pick = st.multiselect("Layers", _layer_names,
-                           default=[n for n in _layer_names if n in ("M0", "M1", "M2")][:3]
-                           or _layer_names[:2], key="density_layers")
-    _window = st.select_slider("Window", options=[25, 50, 100, 200, 500, 1000],
-                               value=100, format_func=lambda v: f"{v} nm",
-                               key="density_window")
-    _combine = st.checkbox("Combine the chosen layers into one map", key="density_combine")
-    if _pick:
-        _density, _density_error = process_density(
-            _tool_bytes, _tool_file, layermap, tuple(_pick), float(_window), _combine)
-        if _density_error:
-            st.error(_density_error)
-        elif _density:
-            _shown = list(_density["layers"])[0] if _density["layers"] else None
-            _which = st.selectbox("Map", list(_density["layers"]), key="density_shown") \
-                if len(_density["layers"]) > 1 else _shown
-            toolbench.density_panel(_density, density_heatmap(_density, _which)
-                                    if _which else None)
-    else:
-        st.info("Choose at least one layer.")
-
-if _chosen == "Diff":
-    st.markdown("**Structural diff** — cells, shapes, instances and texts, compared "
-                "one for one. This is not the XOR.")
-    # Uploading the same file twice gives two entries with one name, so the "other"
-    # list can be empty even with two uploads. Selecting nothing then reads as a
-    # crash rather than as "there is nothing to compare".
-    _distinct = sorted(set(_tool_names))
-    if len(_distinct) < 2:
-        st.info("Upload a second, different layout to compare against.")
-    else:
-        _dcols = st.columns(2)
-        _da = _dcols[0].selectbox("A", _distinct, index=0, key="diff_a")
-        _others = [n for n in _distinct if n != _da]
-        _db = _dcols[1].selectbox("B", _others, index=0, key="diff_b")
-        _diff, _diff_error = process_diff(file_bytes(uploads[_idx_of[_da]]), _da,
-                                          file_bytes(uploads[_idx_of[_db]]), _db, layermap)
-        if _diff_error:
-            st.error(_diff_error)
+    if chosen == "Density map":
+        _outlines_for_density, _ = process_outlines(tool_bytes, tool_file, layermap, conn_stack)
+        _layer_names = [row["name"] for row in (_outlines_for_density or {}).get("layers", [])]
+        _pick = st.multiselect("Layers", _layer_names,
+                               default=[n for n in _layer_names if n in ("M0", "M1", "M2")][:3]
+                               or _layer_names[:2], key="density_layers")
+        _window = st.select_slider("Window", options=[25, 50, 100, 200, 500, 1000],
+                                   value=100, format_func=lambda v: f"{v} nm",
+                                   key="density_window")
+        _combine = st.checkbox("Combine the chosen layers into one map", key="density_combine")
+        if _pick:
+            _density, _density_error = process_density(
+                tool_bytes, tool_file, layermap, tuple(_pick), float(_window), _combine)
+            if _density_error:
+                st.error(_density_error)
+            elif _density:
+                _shown = list(_density["layers"])[0] if _density["layers"] else None
+                _which = st.selectbox("Map", list(_density["layers"]), key="density_shown") \
+                    if len(_density["layers"]) > 1 else _shown
+                toolbench.density_panel(_density, density_heatmap(_density, _which)
+                                        if _which else None)
         else:
-            toolbench.diff_panel(_diff)
+            st.info("Choose at least one layer.")
 
-if _chosen == "Browse shapes":
-    _outlines_for_browse, _browse_error = process_outlines(
-        _tool_bytes, _tool_file, layermap, conn_stack)
-    if _browse_error:
-        st.error(_browse_error)
-    else:
-        toolbench.browse_shapes(_outlines_for_browse or {})
+    if chosen == "Diff":
+        st.markdown("**Structural diff** — cells, shapes, instances and texts, compared "
+                    "one for one. This is not the XOR.")
+        # Uploading the same file twice gives two entries with one name, so the "other"
+        # list can be empty even with two uploads. Selecting nothing then reads as a
+        # crash rather than as "there is nothing to compare".
+        _distinct = sorted(set(tool_names))
+        if len(_distinct) < 2:
+            st.info("Upload a second, different layout to compare against.")
+        else:
+            _dcols = st.columns(2)
+            _da = _dcols[0].selectbox("A", _distinct, index=0, key="diff_a")
+            _others = [n for n in _distinct if n != _da]
+            _db = _dcols[1].selectbox("B", _others, index=0, key="diff_b")
+            _diff, _diff_error = process_diff(file_bytes(uploads[_idx_of[_da]]), _da,
+                                              file_bytes(uploads[_idx_of[_db]]), _db, layermap)
+            if _diff_error:
+                st.error(_diff_error)
+            else:
+                toolbench.diff_panel(_diff)
 
-if _chosen == "Browse instances":
-    toolbench.browse_instances(process_tree(_tool_bytes, _tool_file))
+    if chosen == "Browse shapes":
+        _outlines_for_browse, _browse_error = process_outlines(
+            tool_bytes, tool_file, layermap, conn_stack)
+        if _browse_error:
+            st.error(_browse_error)
+        else:
+            toolbench.browse_shapes(_outlines_for_browse or {})
 
-st.markdown(hint(
-    "<b>Marker browser</b>, <b>trace net</b>, <b>trace all nets</b>, "
-    "<b>shapes to markers</b> and <b>edit layer stack</b> live inside the layout "
-    "viewer above - they act on the drawing, so they belong next to it."),
-    unsafe_allow_html=True)
+    if chosen == "Browse instances":
+        toolbench.browse_instances(process_tree(tool_bytes, tool_file))
+
+
 
 st.markdown(section("Per-layout detail"), unsafe_allow_html=True)
 
@@ -1382,7 +1398,8 @@ for idx, metadata in enumerate(metadata_list):
                     hierarchy=hierarchy_for_view,
                     tree=tree_for_view,
                     interactive=True)
-                _handle_tool_event(_event)
+                _handle_tool_event(_event, uploads[idx].name)
+                tool_panel(uploads[idx].name)
 
         with tabs[1]:
             drc, drc_error = process_drc(file_bytes(uploads[idx]), uploads[idx].name,
