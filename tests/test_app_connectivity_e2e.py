@@ -216,3 +216,40 @@ def test_identical_uploads_report_no_differences(monkeypatch):
     assert not at.exception, [e.value for e in at.exception]
     verdicts = " ".join(m.value for m in at.markdown if 'class="verdict"' in m.value)
     assert "Identical — no geometric difference" in verdicts
+
+
+# --- choosing which two layouts to compare ---------------------------------
+
+def test_the_pair_to_compare_can_be_chosen_from_more_than_two_uploads(run_app):
+    """With four uploads there are six pairs, and the section follows the choice."""
+    at = run_app(["AN2D1_2_RT_4.gds", "DCAP0_1_RT_4.gds", "DCAP0_2_RT_4.gds",
+                  "NR2D1_1_RT_4.gds"])
+    picker = next(s for s in at.selectbox if s.label == "Which two layouts to compare")
+    assert len(picker.options) == 6                    # 4 choose 2
+    assert all("→" in label for label in picker.options)
+    first = picker.value
+
+    other = next(o for o in picker.options if o != first)
+    at = picker.select(other).run()
+    assert not at.exception, [e.value for e in at.exception]
+    picker = next(s for s in at.selectbox if s.label == "Which two layouts to compare")
+    assert picker.value == other
+    # The section below is about the chosen pair, not the default one.
+    a, b = other.split(" → ")
+    assert any(a in m.value or b in m.value for m in at.markdown), \
+        "the comparison section did not follow the selection"
+
+
+def test_the_expanded_comparison_opens_on_the_chosen_pair(run_app):
+    at = run_app(["AN2D1_2_RT_4.gds", "DCAP0_1_RT_4.gds", "DCAP0_2_RT_4.gds"])
+    picker = next(s for s in at.selectbox if s.label == "Which two layouts to compare")
+    chosen = picker.options[-1]
+    at = picker.select(chosen).run()
+    expand = next(b for b in at.button if b.key == "cmp_expand")
+    at = expand.click().run()
+    assert not at.exception, [e.value for e in at.exception]
+    focus = at.session_state["gv_focus"]
+    assert focus["kind"] == "compare"
+    assert f'{focus["a"]} → {focus["b"]}' == chosen
+    # The workspace owns the screen: the chat input beside the layout is present.
+    assert at.chat_input

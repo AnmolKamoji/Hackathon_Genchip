@@ -94,26 +94,6 @@ def compare_panel(xor: dict[str, Any], outlines_a: dict[str, Any],
     render_viewer(payload, height=height, key=key)
 
 
-def pick_pair(names: list[str], key: str = "pair") -> tuple[str, str]:
-    """Which two of the uploaded files to compare.
-
-    With more than two files the old page always compared the first two, which is
-    only right by accident. The second box excludes the first, so the pair can
-    never be a file against itself.
-    """
-    left, arrow, right = st.columns([3, 0.5, 3])
-    a = left.selectbox("Compare", names, index=0, key=f"{key}_a")
-    arrow.markdown("<div style='text-align:center;padding-top:32px'>→</div>",
-                   unsafe_allow_html=True)
-    others = [n for n in names if n != a] or names
-    default = 0
-    stored = st.session_state.get(f"{key}_b")
-    if stored in others:
-        default = others.index(stored)
-    b = right.selectbox("against", others, index=default, key=f"{key}_b")
-    return a, b
-
-
 def workspace(request: dict[str, Any], render_view: Callable[[], None],
               answer: Callable[[str], str], height: int = 720) -> None:
     """The expanded view: the drawing large and centred, the chatbot beside it.

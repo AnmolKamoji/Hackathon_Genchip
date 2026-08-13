@@ -32,7 +32,7 @@ from analyzer.techparams import (compare_to_reference, find_reference,
 from ui.theme import (CSS, chips, hint, section, style_figure, swatch,
                       verdict_html)
 from ui.workspace import (clear_focus, compare_panel, focus_request, layout_panel,
-                          pick_pair, workspace)
+                          workspace)
 
 # Explicit path: the no-argument form finds .env by inspecting the call stack,
 # which raises when app.py is executed in an embedded or exec'd context.
@@ -1007,8 +1007,14 @@ if len(uploads) >= 2:
     elif xor_result:
         names = xor_result["files"]
         labels = [f"{p['a']} → {p['b']}" for p in xor_result["pairs"]]
-        pick = st.selectbox("Compare", labels, key="xor_pair",
-                            label_visibility="collapsed") if len(labels) > 1 else labels[0]
+        # With more than two uploads this is the choice of *which* two to compare.
+        # It was label-less, which made it look like a filter rather than the
+        # control that decides what the whole section below is about.
+        pick = st.selectbox(
+            "Which two layouts to compare", labels, key="xor_pair",
+            help="Every pair of uploaded layouts is available. The first file is "
+                 "the one differences are measured from: red is only in it, green "
+                 "only in the second.") if len(labels) > 1 else labels[0]
         pair = xor_result["pairs"][labels.index(pick)]
         detail = pair.get("detail")
         _xor_for_chat = detail or {"comparable": False,
