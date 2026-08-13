@@ -25,6 +25,7 @@ An answer can pass one and fail another, which is why all three are reported.
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
@@ -115,6 +116,105 @@ def _negated(text: str, position: int, end: int | None = None) -> bool:
         return False
     contrastive = _CONTRASTIVE.search(after)
     return not (contrastive and contrastive.start() < cue.start())
+
+
+
+# Published rates per million tokens, for reporting what a run actually cost. Cache
+# reads bill at a tenth of input and cache writes at 1.25x, which is why the metadata
+# sits in a cached block: after the first question about a file, the digest is nearly
+# free. Sonnet 5 carries introductory pricing through 2026-08-31.
+PRICING = {
+    "claude-opus-5":    {"in": 5.00, "out": 25.00},
+    "claude-opus-4-8":  {"in": 5.00, "out": 25.00},
+    "claude-sonnet-5":  {"in": 2.00, "out": 10.00},
+    "claude-sonnet-4-6": {"in": 3.00, "out": 15.00},
+    "claude-haiku-4-5": {"in": 1.00, "out": 5.00},
+    "claude-fable-5":   {"in": 10.00, "out": 50.00},
+}
+
+
+def cost_of(model: str, totals: dict) -> float | None:
+    """Dollars for a run, or None for a model whose rate is not listed here."""
+    rate = PRICING.get(model)
+    if not rate:
+        return None
+    return (totals["input"] * rate["in"]
+            + totals["cache_write"] * rate["in"] * 1.25
+            + totals["cache_read"] * rate["in"] * 0.10
+            + totals["output"] * rate["out"]) / 1_000_000
+
+
+
+TRANSCRIPTS = ROOT / "build" / "judge"
+
+
+def log_answer(path: Path, record: dict) -> None:
+    """Append one graded answer as JSON. One line per answer, so a run in progress
+    can be read while it is still going and a killed run keeps what it had."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def load_transcript(path: Path) -> list[dict]:
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()]
+
+
+def regrade(path: Path) -> int:
+    """Re-grade a saved transcript with the current graders. Costs nothing.
+
+    This is what makes the grader safe to iterate on: every time the restraint scan or
+    a value check changes, the whole history of real model answers can be re-run
+    against it for free, and a grader change that would have failed a good answer
+    shows up immediately.
+    """
+    records = load_transcript(path)
+    if not records:
+        print(f"{path} is empty.")
+        return 1
+
+    # The battery is rebuilt per file so the expected values come from the oracle
+    # rather than from whatever the transcript happened to record.
+    graders: dict[tuple[str, str], tuple] = {}
+    for gds_name in {r["file"] for r in records}:
+        gds = SAMPLES / gds_name
+        if not gds.exists():
+            continue
+        reference = find_reference(gds)
+        for question, grader, axis in battery(
+                fact_sheet(gds), load_reference(reference) if reference else None):
+            graders[(gds_name, question)] = (grader, axis)
+
+    changed = failed = 0
+    by_model: dict[str, list[int]] = {}
+    for record in records:
+        key = (record["file"], record["question"])
+        if key not in graders:
+            continue
+        grader, axis = graders[key]
+        fresh = grade_one(record["question"], record.get("reply"), grader, axis,
+                          record.get("metadata_digest") or {})
+        slot = by_model.setdefault(record.get("model", "?"), [0, 0])
+        slot[0] += 1
+        if fresh["verdict"] == "FAIL":
+            slot[1] += 1
+            failed += 1
+            print(f"  FAIL [{record.get('model')}] {record['question']}")
+            for reason in fresh["reasons"]:
+                print(f"         ! {reason}")
+            print(f"         > {' '.join((record.get('reply') or '').split())[:240]}")
+        if fresh["verdict"] != record.get("verdict"):
+            changed += 1
+            print(f"  CHANGED [{record.get('model')}] {record['question']}: "
+                  f"{record.get('verdict')} -> {fresh['verdict']}")
+
+    print("\n" + "=" * 78)
+    for model, (count, bad) in sorted(by_model.items()):
+        print(f"  {model:<22} {count - bad}/{count} passed")
+    print(f"  re-graded {len(records)} saved answers, {changed} verdict(s) changed, "
+          f"no API calls")
+    return 1 if failed else 0
 
 
 # --- graders -----------------------------------------------------------------
@@ -344,7 +444,8 @@ def grade_one(question: str, reply: str | None, grader, axis: str,
 
 
 def judge(gds: Path, use_model: bool, limit: int | None = None,
-          restraint_only: bool = False) -> list[dict[str, Any]]:
+          restraint_only: bool = False, transcript: Path | None = None,
+          model_name: str = "deterministic") -> list[dict[str, Any]]:
     layermap = load_lyp(default_layermap())
     oracle = fact_sheet(gds)
     reference = find_reference(gds)
@@ -357,20 +458,65 @@ def judge(gds: Path, use_model: bool, limit: int | None = None,
     if limit:
         questions = questions[:limit]
 
+    from ai.llm import USAGE
+
     results = []
     for question, grader, axis in questions:
-        if use_model:
+        before = len(USAGE)
+        source = "deterministic"
+        if use_model == "as-app":
+            # What the user actually sees. app.py answers deterministically first and
+            # only falls through to the model when no local branch claims the
+            # question, so grading ask_llm directly measures a path the app never
+            # takes for most questions.
+            reply = answer(metadata, question)
+            if reply is None:
+                from ai.llm import ask_llm, looks_like_failure
+                reply = ask_llm(metadata, question)
+                source = "model (deterministic deferred)"
+                if looks_like_failure(reply):
+                    reply = None
+        elif use_model:
             from ai.llm import ask_llm, looks_like_failure
+            source = "model (forced)"
             reply = ask_llm(metadata, question)
             if looks_like_failure(reply):
-                results.append({"question": question, "axis": axis,
-                                "verdict": "SKIP", "reasons": ["backend unavailable"],
-                                "reply": ""})
+                result = {"question": question, "axis": axis, "verdict": "SKIP",
+                          "reasons": ["backend unavailable"], "reply": ""}
+                results.append(result)
+                if transcript:
+                    log_answer(transcript, {**result, "file": gds.name,
+                                            "model": model_name})
                 continue
         else:
             reply = answer(metadata, question)
-        results.append(grade_one(question, reply, grader, axis, metadata))
+        result = grade_one(question, reply, grader, axis, metadata)
+        result["source"] = source
+        results.append(result)
+
+        if transcript:
+            # The metadata digest goes in beside the answer so a re-grade can check
+            # grounding without rebuilding it - and so the record stays meaningful
+            # even if the analyzer changes afterwards.
+            usage = USAGE[before:]
+            log_answer(transcript, {
+                **result, "file": gds.name, "model": model_name,
+                "usage": {k: sum(u.get(k, 0) for u in usage)
+                          for k in ("input", "output", "cache_write", "cache_read")},
+                "metadata_digest": _grounding_digest(metadata),
+            })
     return results
+
+
+def _grounding_digest(metadata: dict[str, Any]) -> dict[str, Any]:
+    """The parts of the metadata the grounding check reads.
+
+    Storing the whole metadata would make every transcript line enormous; storing
+    none of it would make a re-grade unable to check grounding at all.
+    """
+    return {key: metadata.get(key) for key in
+            ("design", "layout", "layers", "classification", "pitch", "measurements")
+            if metadata.get(key) is not None}
 
 
 # --- the judge's own negative control ----------------------------------------
@@ -446,21 +592,122 @@ def self_test(count: list | None = None) -> list[str]:
     return failures
 
 
+
+def compare_models(models: list[str], files: list[Path], limit: int | None,
+                   restraint_only: bool, yes: bool, max_calls: int,
+                   transcript: Path | None = None) -> int:
+    """Run the same battery on each model and report score against cost.
+
+    The point of the comparison: this tool computes every number deterministically and
+    hands them to the model already measured, so a smaller model is not being asked to
+    do arithmetic. What changes between models is phrasing and instruction-following -
+    which is exactly what the restraint axis measures.
+    """
+    import os
+
+    from ai.llm import reset_usage, usage_totals
+
+    reference = find_reference(files[0])
+    questions = battery(fact_sheet(files[0]),
+                        load_reference(reference) if reference else None)
+    if restraint_only:
+        questions = [q for q in questions if q[2] == "restraint"]
+    per_file = min(len(questions), limit or len(questions))
+    estimate = per_file * len(files) * len(models)
+    print(f"{len(models)} model(s) x {len(files)} file(s) x {per_file} question(s) "
+          f"= about {estimate} API calls.\n")
+    if estimate > max_calls and not yes:
+        print(f"Over the {max_calls}-call ceiling. Re-run with --yes, or narrow it "
+              f"with --limit / --restraint-only / a single --gds.")
+        return 2
+
+    table = []
+    original = os.environ.get("ANTHROPIC_MODEL")
+    try:
+        for model in models:
+            os.environ["ANTHROPIC_MODEL"] = model
+            reset_usage()
+            passed = failed = 0
+            failures: list[str] = []
+            print(f"--- {model}", flush=True)
+            for path in files:
+                for result in judge(path, True, limit, restraint_only,
+                                    transcript, model):
+                    print(f"    {result['verdict']:<5} {result['question'][:64]}",
+                          flush=True)
+                    if result["verdict"] == "FAIL":
+                        failed += 1
+                        failures.append(f"{path.name}: {result['question']} "
+                                        f"-> {'; '.join(result['reasons'])}")
+                    elif result["verdict"] == "PASS":
+                        passed += 1
+            totals = usage_totals()
+            spent = cost_of(model, totals)
+            print(f"    => {passed} passed, {failed} failed, {totals['calls']} calls, "
+                  + (f"${spent:.4f}" if spent is not None else "cost unknown"),
+                  flush=True)
+            table.append({"model": model, "pass": passed, "fail": failed,
+                          "usage": totals, "cost": spent, "failures": failures})
+    finally:
+        if original is None:
+            os.environ.pop("ANTHROPIC_MODEL", None)
+        else:
+            os.environ["ANTHROPIC_MODEL"] = original
+
+    print("=" * 78)
+    print(f"  {'model':<20} {'score':>9}  {'calls':>6} {'out tok':>8} {'cost':>9}")
+    print("=" * 78)
+    total_cost = 0.0
+    for row in table:
+        graded = row["pass"] + row["fail"]
+        cost = row["cost"]
+        total_cost += cost or 0.0
+        print(f"  {row['model']:<20} {row['pass']:>4}/{graded:<4} "
+              f"{row['usage']['calls']:>6} {row['usage']['output']:>8} "
+              + (f"${cost:>8.4f}" if cost is not None else f"{'n/a':>9}"))
+    print("=" * 78)
+    print(f"  {'total':<20} {'':>9}  {'':>6} {'':>8} ${total_cost:>8.4f}")
+
+    for row in table:
+        if row["failures"]:
+            print(f"\n  {row['model']} failed:")
+            for failure in row["failures"]:
+                print(f"    ! {failure}")
+    return 1 if any(row["fail"] for row in table) else 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--gds", action="append", default=None)
     parser.add_argument("--model", action="store_true",
-                        help="judge the Anthropic answers (costs API credit)")
+                        help="force every question to the model, bypassing the "
+                             "deterministic layer (costs API credit)")
+    parser.add_argument("--as-app", action="store_true",
+                        help="grade the path the app actually takes: deterministic "
+                             "first, model only where no local branch claims the "
+                             "question. This is what a user sees.")
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--show", action="store_true", help="print every answer")
+    parser.add_argument("--transcript", default=None,
+                        help="where to append the graded answers "
+                             "(default build/judge/<timestamp>.jsonl)")
+    parser.add_argument("--regrade", default=None,
+                        help="re-grade a saved transcript with the current graders; "
+                             "makes no API calls")
     parser.add_argument("--max-calls", type=int, default=40,
                         help="refuse a --model run larger than this without --yes")
     parser.add_argument("--yes", action="store_true",
                         help="accept the API cost of a large --model run")
+    parser.add_argument("--models", default=None,
+                        help="comma-separated model ids to compare, e.g. "
+                             "claude-opus-5,claude-sonnet-5,claude-haiku-4-5")
     parser.add_argument("--restraint-only", action="store_true",
                         help="only the questions where a model can overclaim")
     args = parser.parse_args()
+
+    if args.regrade:
+        return regrade(Path(args.regrade))
 
     print("=" * 78)
     print("JUDGE self-test (can it fail a wrong answer?)")
@@ -477,6 +724,15 @@ def main() -> int:
         return 0
 
     files = ([Path(g) for g in args.gds] if args.gds else sorted(SAMPLES.glob("*.gds")))
+
+    from datetime import datetime
+    transcript = (Path(args.transcript) if args.transcript
+                  else TRANSCRIPTS / f"{datetime.now():%Y%m%d-%H%M%S}.jsonl")
+
+    if args.models:
+        return compare_models([m.strip() for m in args.models.split(",")],
+                              files, args.limit, args.restraint_only, args.yes,
+                              args.max_calls, transcript)
 
     # One API call per question per file. On the full sample set that is a few hundred
     # calls, which is real money on a small budget, so it has to be asked for.
@@ -510,7 +766,11 @@ def main() -> int:
     by_axis: dict[str, list[int]] = {}
 
     for path in files:
-        results = judge(path, args.model, args.limit, args.restraint_only)
+        mode = "as-app" if args.as_app else args.model
+        results = judge(path, mode, args.limit, args.restraint_only,
+                        transcript,
+                        "as-app" if args.as_app else
+                        "model" if args.model else "deterministic")
         bad = [r for r in results if r["verdict"] == "FAIL"]
         skips = [r for r in results if r["verdict"] in ("SKIP", "DEFER")]
         total += len(results)
@@ -544,6 +804,9 @@ def main() -> int:
         print(f"  {axis:<12} {count - bad_count}/{count} passed")
     print(f"  {'TOTAL':<12} {total - failed - skipped}/{total - skipped} passed"
           + (f", {skipped} deferred to the model" if skipped else ""))
+    if transcript.exists():
+        print(f"\n  {len(load_transcript(transcript))} answers saved to {transcript}")
+        print(f"  Re-grade them for free:  python tools/judge.py --regrade {transcript}")
     return 1 if failed else 0
 
 

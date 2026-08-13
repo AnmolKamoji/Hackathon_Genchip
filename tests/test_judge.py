@@ -247,3 +247,145 @@ def test_no_analysis_module_reads_a_rendered_image():
         assert "save_image" not in source, module.name
         assert "klayout.lay" not in source, module.name
         assert "PIL" not in source and "Image.open" not in source, module.name
+
+
+# --- cost accounting ---------------------------------------------------------
+
+def test_cost_uses_the_cache_discounts():
+    """Cached reads bill at a tenth of input and writes at 1.25x.
+
+    Getting this wrong would misreport the cost of a run by an order of magnitude,
+    since the metadata block dominates every call and is nearly all cache after the
+    first question about a file.
+    """
+    totals = {"input": 1_000_000, "output": 0, "cache_write": 0, "cache_read": 0}
+    assert J.cost_of("claude-opus-5", totals) == pytest.approx(5.00)
+
+    totals = {"input": 0, "output": 1_000_000, "cache_write": 0, "cache_read": 0}
+    assert J.cost_of("claude-opus-5", totals) == pytest.approx(25.00)
+
+    totals = {"input": 0, "output": 0, "cache_write": 0, "cache_read": 1_000_000}
+    assert J.cost_of("claude-opus-5", totals) == pytest.approx(0.50)
+
+    totals = {"input": 0, "output": 0, "cache_write": 1_000_000, "cache_read": 0}
+    assert J.cost_of("claude-opus-5", totals) == pytest.approx(6.25)
+
+
+def test_cost_is_none_for_an_unlisted_model():
+    """Better to report nothing than to price a model at another's rate."""
+    assert J.cost_of("some-future-model", {"input": 1, "output": 1,
+                                           "cache_write": 0, "cache_read": 0}) is None
+
+
+def test_usage_totals_start_empty_and_sum():
+    from ai.llm import USAGE, reset_usage, usage_totals
+
+    reset_usage()
+    assert usage_totals() == {"calls": 0, "input": 0, "output": 0,
+                              "cache_write": 0, "cache_read": 0}
+    USAGE.append({"input": 10, "output": 5, "cache_write": 100, "cache_read": 0})
+    USAGE.append({"input": 2, "output": 3, "cache_write": 0, "cache_read": 100})
+    assert usage_totals() == {"calls": 2, "input": 12, "output": 8,
+                              "cache_write": 100, "cache_read": 100}
+    reset_usage()
+
+
+def test_the_model_is_read_from_the_environment():
+    """Switching models is a .env change, not a code change."""
+    import os
+
+    from ai.llm import DEFAULT_ANTHROPIC_MODEL, anthropic_model
+
+    saved = os.environ.pop("ANTHROPIC_MODEL", None)
+    try:
+        assert anthropic_model() == DEFAULT_ANTHROPIC_MODEL
+        os.environ["ANTHROPIC_MODEL"] = "claude-haiku-4-5"
+        assert anthropic_model() == "claude-haiku-4-5"
+    finally:
+        if saved is None:
+            os.environ.pop("ANTHROPIC_MODEL", None)
+        else:
+            os.environ["ANTHROPIC_MODEL"] = saved
+
+
+# --- the answers are kept ----------------------------------------------------
+
+def test_every_graded_answer_is_written_to_the_transcript(tmp_path):
+    """A paid answer that is graded and discarded has to be paid for again to look at.
+
+    On a small budget that means it never gets looked at, so the judge writes each
+    answer as it is produced - one JSON object per line, so a run that is killed
+    part-way keeps everything it had.
+    """
+    transcript = tmp_path / "run.jsonl"
+    results = J.judge(AN2D1, use_model=False, transcript=transcript,
+                      model_name="deterministic")
+    saved = J.load_transcript(transcript)
+    assert len(saved) == len(results)
+
+    record = saved[0]
+    for field in ("question", "verdict", "reply", "axis", "file", "model",
+                  "metadata_digest"):
+        assert field in record, field
+    assert record["file"] == AN2D1.name
+    assert record["reply"], "the answer text itself must be kept, not just the verdict"
+
+
+def test_a_transcript_can_be_regraded_without_any_api_call(tmp_path, monkeypatch):
+    """The point of keeping the answers: the grader can be changed and every past
+    answer re-checked for free."""
+    transcript = tmp_path / "run.jsonl"
+    J.judge(AN2D1, use_model=False, transcript=transcript)
+
+    def explode(*args, **kwargs):
+        raise AssertionError("re-grading must not call a model")
+
+    import ai.llm
+    monkeypatch.setattr(ai.llm, "ask_llm", explode)
+    assert J.regrade(transcript) == 0
+
+
+def test_regrading_uses_the_current_graders_not_the_recorded_verdict(tmp_path):
+    """A stricter grader must be able to fail an answer that passed when it was
+    recorded - otherwise re-grading only ever confirms the old verdict."""
+    transcript = tmp_path / "run.jsonl"
+    J.log_answer(transcript, {
+        "question": "What is the Gate extension?", "file": AN2D1.name,
+        "model": "test", "axis": "correctness", "verdict": "PASS",
+        "reasons": [], "reply": "The gate extension is 999 nm.",
+        "metadata_digest": {},
+    })
+    assert J.regrade(transcript) == 1     # the oracle says 12 nm, so this must fail
+
+
+def test_the_transcript_survives_a_killed_run(tmp_path):
+    """One JSON object per line, appended - not a single document written at the end.
+
+    A run that is interrupted after 20 paid answers must keep those 20.
+    """
+    transcript = tmp_path / "run.jsonl"
+    for index in range(3):
+        J.log_answer(transcript, {"question": f"q{index}", "verdict": "PASS"})
+    lines = transcript.read_text().strip().splitlines()
+    assert len(lines) == 3
+    assert all(line.startswith("{") and line.endswith("}") for line in lines)
+
+
+def test_the_stored_digest_is_enough_to_recheck_grounding(tmp_path):
+    """Grounding is checked against the metadata, so a re-grade needs it stored.
+
+    Storing all of it would make each line enormous; storing none would make the
+    grounding axis silently pass everything on a re-grade.
+    """
+    transcript = tmp_path / "run.jsonl"
+    J.judge(AN2D1, use_model=False, transcript=transcript)
+    digest = J.load_transcript(transcript)[0]["metadata_digest"]
+    assert digest.get("design", {}).get("polygon_count")
+    assert digest.get("classification", {}).get("tech_parameters")
+
+    from tools.factcheck import audit
+    _, ungrounded = audit("q", "There are 89 polygons and a 12 nm gate extension.",
+                          digest)
+    assert ungrounded == [], ungrounded
+    _, invented = audit("q", "There are 4242 polygons.", digest)
+    assert invented == ["4242"]

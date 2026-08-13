@@ -161,6 +161,37 @@ def ollama_model() -> str:
     return os.getenv("OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL)
 
 
+# Token usage per call, so the cost of a run can be measured instead of estimated.
+# Kept in memory only: it is diagnostics, not state the app depends on.
+USAGE: list[dict] = []
+
+
+def reset_usage() -> None:
+    USAGE.clear()
+
+
+def usage_totals() -> dict:
+    """Summed usage, with cached reads separated - they are billed at a tenth."""
+    totals = {"calls": len(USAGE), "input": 0, "output": 0,
+              "cache_write": 0, "cache_read": 0}
+    for entry in USAGE:
+        for key in ("input", "output", "cache_write", "cache_read"):
+            totals[key] += entry.get(key, 0) or 0
+    return totals
+
+
+def _record_usage(model: str, usage) -> None:
+    if usage is None:
+        return
+    USAGE.append({
+        "model": model,
+        "input": getattr(usage, "input_tokens", 0) or 0,
+        "output": getattr(usage, "output_tokens", 0) or 0,
+        "cache_write": getattr(usage, "cache_creation_input_tokens", 0) or 0,
+        "cache_read": getattr(usage, "cache_read_input_tokens", 0) or 0,
+    })
+
+
 def _anthropic_configured() -> bool:
     return bool(os.getenv("ANTHROPIC_API_KEY"))
 
@@ -661,6 +692,66 @@ def _env_float(name: str, default: float) -> float:
 
 # --- Anthropic backend --------------------------------------------------------
 
+# Parameters a model may reject, and what to drop when it does. The API names the
+# offending parameter in the 400 message, so the message is matched rather than the
+# model id - a list of model ids goes stale the moment a new model ships.
+_DEGRADATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("effort", ("output_config",)),
+    ("fallback", ("betas", "fallbacks")),
+    ("beta", ("betas", "fallbacks")),
+    ("thinking", ("thinking",)),
+    ("temperature", ("temperature",)),
+    ("top_p", ("top_p",)),
+    ("top_k", ("top_k",)),
+)
+
+# model -> parameter groups it has already rejected, so the wasted round trip
+# happens once per process rather than once per question.
+_UNSUPPORTED: dict[str, set[tuple[str, ...]]] = {}
+
+
+def _call_with_degradation(client, kwargs: dict[str, Any]):
+    """Send the request, dropping any parameter the model rejects, and retry.
+
+    Model tiers do not accept the same parameters. `output_config.effort` arrived
+    with Opus 4.5 and Sonnet 4.6, so Haiku 4.5 rejects it with "This model does not
+    support the effort parameter" - and because the previous code recovered only
+    from beta-related 400s, setting ANTHROPIC_MODEL to Haiku made every answer fail
+    and fall through to the local model, silently disabling the AI narrative.
+
+    Matching the error text rather than keeping a list of model ids means a model
+    released after this code was written degrades correctly instead of failing. The
+    first call to a model that rejects something costs one wasted round trip; every
+    later call is clean, because the rejection is remembered.
+    """
+    import anthropic
+
+    model = str(kwargs.get("model", ""))
+    for keys in _UNSUPPORTED.get(model, set()):
+        for key in keys:
+            kwargs.pop(key, None)
+
+    beta_endpoint = "betas" in kwargs or "fallbacks" in kwargs
+    for _ in range(len(_DEGRADATIONS) + 1):
+        try:
+            return (client.beta.messages.create(**kwargs) if beta_endpoint
+                    else client.messages.create(**kwargs))
+        except anthropic.BadRequestError as exc:
+            message = str(exc).lower()
+            for needle, keys in _DEGRADATIONS:
+                if needle in message and any(k in kwargs for k in keys):
+                    for key in keys:
+                        kwargs.pop(key, None)
+                    _UNSUPPORTED.setdefault(model, set()).add(keys)
+                    if needle in ("fallback", "beta"):
+                        beta_endpoint = False
+                    break
+            else:
+                raise                      # not a parameter we know how to drop
+    raise LLMUnavailable("The request was rejected after dropping every optional "
+                         "parameter this model could not accept.")
+
+
 def _anthropic_call(system_blocks: list[dict], user_text: str) -> str:
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
@@ -689,17 +780,7 @@ def _anthropic_call(system_blocks: list[dict], user_text: str) -> str:
         "fallbacks": "default",
     }
 
-    try:
-        response = client.beta.messages.create(**kwargs)
-    except anthropic.BadRequestError as exc:
-        # An unsupported beta/parameter on this model should not kill the answer:
-        # retry once on the plain endpoint without the fallback opt-in.
-        if "fallback" in str(exc).lower() or "beta" in str(exc).lower():
-            kwargs.pop("betas", None)
-            kwargs.pop("fallbacks", None)
-            response = client.messages.create(**kwargs)
-        else:
-            raise
+    response = _call_with_degradation(client, kwargs)
 
     # Check stop_reason before reading content: a refusal can carry an empty or
     # partial content list, so indexing content[0] unconditionally would break.
@@ -708,6 +789,8 @@ def _anthropic_call(system_blocks: list[dict], user_text: str) -> str:
         if getattr(response, "stop_details", None):
             detail = f" (category: {getattr(response.stop_details, 'category', None)})"
         raise LLMUnavailable(f"The model declined this request{detail}.")
+
+    _record_usage(kwargs.get("model", ""), getattr(response, "usage", None))
 
     text = "".join(b.text for b in response.content if getattr(b, "type", None) == "text").strip()
     if not text:

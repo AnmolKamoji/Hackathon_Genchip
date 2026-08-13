@@ -360,3 +360,107 @@ def test_bad_env_values_do_not_crash(stub_ollama, metadata, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_MAX_TOKENS", "")
     llm.ask_llm(metadata, "anything")
     assert stub_ollama.captured["options"]["num_ctx"] == llm.DEFAULT_NUM_CTX
+
+
+# --- graceful degradation across model tiers --------------------------------
+
+class _Rejects:
+    """A stub Anthropic client that rejects named parameters with a 400."""
+
+    def __init__(self, reject: dict[str, str]):
+        self.reject = reject           # parameter name -> message fragment
+        self.calls: list[dict] = []
+        self.messages = self._Endpoint(self, beta=False)
+        self.beta = type("B", (), {"messages": self._Endpoint(self, beta=True)})()
+
+    class _Endpoint:
+        def __init__(self, outer, beta):
+            self.outer, self.beta = outer, beta
+
+        def create(self, **kwargs):
+            import anthropic
+            self.outer.calls.append(dict(kwargs, _beta=self.beta))
+            for parameter, message in self.outer.reject.items():
+                if parameter in kwargs:
+                    raise anthropic.BadRequestError(
+                        message=message, response=_FakeResponse(), body=None)
+            return _FakeMessage()
+
+
+class _FakeResponse:
+    status_code = 400
+    headers: dict = {}
+    request = None
+
+
+class _FakeMessage:
+    stop_reason = "end_turn"
+    usage = None
+    content = [type("T", (), {"type": "text", "text": "ok"})()]
+
+
+def test_a_model_that_rejects_effort_still_answers():
+    """Haiku 4.5 has no effort parameter - it arrived with Opus 4.5 / Sonnet 4.6.
+
+    Before this, the retry recovered only from beta-related 400s, so setting
+    ANTHROPIC_MODEL=claude-haiku-4-5 made every answer fail and fall through to the
+    local model: the AI narrative silently stopped working.
+    """
+    from ai.llm import _UNSUPPORTED, _call_with_degradation
+
+    _UNSUPPORTED.clear()
+    client = _Rejects({"output_config": "This model does not support the effort parameter."})
+    result = _call_with_degradation(client, {
+        "model": "claude-haiku-4-5", "max_tokens": 100,
+        "output_config": {"effort": "low"}, "messages": [],
+    })
+    assert result is not None
+    assert len(client.calls) == 2, "should retry once without the parameter"
+    assert "output_config" not in client.calls[1]
+
+
+def test_the_rejection_is_remembered_so_it_costs_one_round_trip():
+    """A wasted call per question would double the cost of every answer."""
+    from ai.llm import _UNSUPPORTED, _call_with_degradation
+
+    _UNSUPPORTED.clear()
+    client = _Rejects({"output_config": "does not support the effort parameter"})
+    for _ in range(3):
+        _call_with_degradation(client, {
+            "model": "claude-haiku-4-5", "max_tokens": 100,
+            "output_config": {"effort": "low"}, "messages": [],
+        })
+    # 2 for the first question (reject + retry), 1 each for the next two.
+    assert len(client.calls) == 4, [c.get("output_config") for c in client.calls]
+
+
+def test_an_unrelated_bad_request_is_not_swallowed():
+    """Dropping parameters until something works would hide a real bug."""
+    import anthropic
+
+    from ai.llm import _UNSUPPORTED, _call_with_degradation
+
+    _UNSUPPORTED.clear()
+    client = _Rejects({"messages": "messages: at least one message is required"})
+    with pytest.raises(anthropic.BadRequestError):
+        _call_with_degradation(client, {"model": "m", "messages": []})
+
+
+def test_a_model_rejecting_several_parameters_degrades_through_all_of_them():
+    from ai.llm import _UNSUPPORTED, _call_with_degradation
+
+    _UNSUPPORTED.clear()
+    client = _Rejects({
+        "output_config": "does not support the effort parameter",
+        "betas": "unsupported beta: server-side-fallback",
+    })
+    result = _call_with_degradation(client, {
+        "model": "old-model", "max_tokens": 100,
+        "output_config": {"effort": "low"},
+        "betas": ["server-side-fallback-2026-07-01"], "fallbacks": "default",
+        "messages": [],
+    })
+    assert result is not None
+    final = client.calls[-1]
+    assert "output_config" not in final and "betas" not in final
+    assert final["_beta"] is False, "should fall back to the non-beta endpoint"
