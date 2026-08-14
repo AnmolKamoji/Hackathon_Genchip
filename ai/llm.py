@@ -352,6 +352,26 @@ def _slim_connectivity(conn: dict[str, Any]) -> dict[str, Any]:
 
 def _digest(metadata: dict[str, Any], cap: int | None = None) -> dict[str, Any]:
     """Shrink metadata to what a review actually needs."""
+    # A pair context: the comparison chat's own shape. It matched neither branch
+    # below, so the key list further down found none of its keys and the model was
+    # handed a document whose cells and layers were empty - and answered, correctly
+    # but uselessly, that it had been given no metadata. Each side is digested on
+    # half the budget so both fit.
+    if "comparing" in metadata and {"a", "b"} <= set(metadata):
+        # Each side is compacted on its own share of the budget, so both arrive whole
+        # and shrunk by the same rules a single file gets rather than by a truncation
+        # that would take one side's layers and leave the other's.
+        head = _dump({k: metadata.get(k) for k in
+                      ("comparing", "difference", "layers_that_differ")})
+        share = max(2000, ((cap or MAX_METADATA_CHARS) - len(head) - 200) // 2)
+        return {
+            "comparing": metadata.get("comparing"),
+            "difference": metadata.get("difference"),
+            "layers_that_differ": metadata.get("layers_that_differ"),
+            "a": json.loads(_compact(metadata.get("a") or {}, share)),
+            "b": json.loads(_compact(metadata.get("b") or {}, share)),
+        }
+
     if "comparison" in metadata and len(metadata) == 1:
         c = metadata["comparison"]
         # `layer_changes` lists every layer including unchanged ones, so it grows
@@ -661,9 +681,21 @@ def _compact(metadata: dict[str, Any], budget: int | None = None) -> str:
 
     if len(text) > cap:
         # Last resort: design-level facts only, still a well-formed document.
-        d = {k: d[k] for k in _ESSENTIAL if k in d}
-        d["detail_omitted"] = ("Per-layer and per-cell detail exceeded the prompt budget. "
-                               "Only design-level totals are available here.")
+        #
+        # Only when that leaves something. A document whose top-level keys are none
+        # of the essential ones - a pair context, say - was reduced to the note alone,
+        # and the model was handed a prompt that said nothing and answered that it had
+        # been given no metadata. An oversized document beats an empty one.
+        essential = {k: d[k] for k in _ESSENTIAL if k in d}
+        if essential:
+            d = essential
+            d["detail_omitted"] = (
+                "Per-layer and per-cell detail exceeded the prompt budget. "
+                "Only design-level totals are available here.")
+        else:
+            d["detail_omitted"] = ("This document is over the prompt budget and is "
+                                   "sent whole: it has no design-level summary to "
+                                   "fall back to.")
         text = _dump(d)
     return text
 

@@ -36,25 +36,66 @@ def _layer_names(layers: list[dict[str, Any]]) -> list[str]:
     return out
 
 
+def _key(name: str) -> str:
+    """A layer name reduced to what a person is actually naming.
+
+    `P-VIAT`, `p-viat`, `p viat`, `P VIAT`, `pviat` and `p_viat` are one layer typed
+    six ways. Nobody types the mask name the way the .lyp spells it, and a question
+    that misses by a hyphen used to fall through to a branch that answered something
+    else - which reads like an answer. Case and every separator are dropped, and the
+    remaining letters and digits are what get matched.
+    """
+    return re.sub(r"[^a-z0-9]+", "", (name or "").lower())
+
+
 def _mentioned_layer(question: str, layers: list[dict[str, Any]]) -> str | None:
     """Find a layer name from the metadata that appears in the question.
 
     Matching against the real layer list is far more reliable than guessing with
     a regex, and longest-first prevents `M0` from shadowing `M0_pin`.
+
+    Spelled exactly, it is matched on word boundaries. Spelled loosely, adjacent
+    words are joined and compared on their letters and digits alone, so "p viat"
+    and "how many m 0 shapes" land on the same layer as `P-VIAT` and `M0`. The
+    longest run that names a layer wins, so "npoly extended" is NPOLY-EXTENDED
+    rather than NPOLY.
     """
+    names = sorted(_layer_names(layers), key=len, reverse=True)
     q = question.lower()
-    for name in sorted(_layer_names(layers), key=len, reverse=True):
+    best: tuple[int, str] | None = None
+
+    for name in names:
         if re.search(rf"(?<![a-z0-9_]){re.escape(name.lower())}(?![a-z0-9_])", q):
-            return name
-    return None
+            best = (len(_key(name)), name)
+            break
+
+    # The loose spellings run even when something matched as written, because the
+    # written match can be the shorter name: "npoly extended" contains `NPOLY` on a
+    # word boundary, and the layer being named is NPOLY-EXTENDED.
+    index: dict[str, str] = {}
+    for name in names:
+        index.setdefault(_key(name), name)
+    tokens = list(re.finditer(r"[A-Za-z0-9]+", question))
+    for i in range(len(tokens)):
+        for j in range(i, min(i + 4, len(tokens) - 1) + 1):
+            # Only join across the characters people substitute for a name's own
+            # separator. A comma or a word in between means these are two things.
+            if j > i and re.search(r"[^\s_\-./]",
+                                   question[tokens[j - 1].end():tokens[j].start()]):
+                break
+            joined = _key("".join(t.group(0) for t in tokens[i:j + 1]))
+            hit = index.get(joined)
+            if hit and (best is None or len(joined) > best[0]):
+                best = (len(joined), hit)
+    return best[1] if best else None
 
 
 def _rows_for(name: str, layers: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Rows matching `name` under either naming scheme."""
-    low = name.lower()
+    """Rows matching `name` under either naming scheme, however it was spelled."""
+    key = _key(name)
     return [x for x in layers
-            if str(x.get("name") or "").lower() == low
-            or str(x.get("technology_name") or "").lower() == low]
+            if _key(str(x.get("name") or "")) == key
+            or _key(str(x.get("technology_name") or "")) == key]
 
 
 _NOT_A_LAYER = {
@@ -96,7 +137,7 @@ def _unknown_layer_token(question: str, layers: list[dict[str, Any]]) -> str | N
     token = m.group(1)
     if not _looks_like_layer_name(token):
         return None
-    if any(token.lower() == n.lower() for n in _layer_names(layers)):
+    if any(_key(token) == _key(n) for n in _layer_names(layers)):
         return None
     return token
 
@@ -104,7 +145,7 @@ def _unknown_layer_token(question: str, layers: list[dict[str, Any]]) -> str | N
 def _group_for(name: str, metadata: dict[str, Any]) -> dict[str, Any] | None:
     """The unioned geometry group for a layer name, if the analyzer produced one."""
     for g in metadata.get("layer_groups", []):
-        if str(g.get("label", "")).lower() == name.lower():
+        if _key(str(g.get("label", ""))) == _key(name):
             return g
     return None
 
@@ -764,7 +805,23 @@ def _fmt_param(value: Any) -> str:
     return str(value)
 
 
-def _techparam_answer(params: dict[str, Any] | None, q: str) -> str | None:
+def _names_a_parameter(params: dict[str, Any] | None, question: str) -> bool:
+    """Does the question name a measured parameter, however it was spelled?
+
+    The keyword trigger below is written in the vocabulary people normally use
+    ("extension", "width", "pitch"), and it misses "what is the gateextension?" -
+    which is a question this tool can answer exactly. Comparing the question's
+    letters and digits against the parameter names catches those without widening
+    the trigger into something that fires on everything.
+    """
+    table = (params or {}).get("parameters") or {}
+    flat = _key(question)
+    return any(len(k) > 3 and _key(k) in flat for k in table)
+
+
+def _techparam_answer(params: dict[str, Any] | None, q: str,
+                      defer_if_unmatched: bool = False,
+                      defer_to_layer: bool = False) -> str | None:
     """Answer a question about a tech-file parameter by quoting the measurement.
 
     The parameter is looked up by name, so "calculate the gate extension" is answered
@@ -786,7 +843,27 @@ def _techparam_answer(params: dict[str, Any] | None, q: str) -> str | None:
                     r"layout|gds|file|nm|how|much|many)\b", " ", q)
     needle = re.sub(r"[?.,;:]|\b\w+\.gds\b", " ", needle).strip()
     record = parameter(params, needle) if needle else None
+
+    # The question named a layer and asked for a quantity this parameter is not
+    # about: `pviat` is a via-geometry parameter, so "the width of pviat" reaching it
+    # answers with size, offset and enclosure while "the width of p-viat" - which the
+    # table does not match at all - answers with the layer's measured width. Same
+    # question, two answers, decided by a hyphen. The table keeps the question only
+    # when it has a parameter for the quantity being asked about; `N-poly width` does,
+    # so that stays here.
+    if record is not None and defer_to_layer:
+        asked = re.findall(r"\b(width|height|area|spacing|space|gap|perimeter|"
+                           r"density|count|shapes?|polygons?)\b", q)
+        if asked and not any(word in record["parameter"].lower() for word in asked):
+            return None
+
     if record is None:
+        if defer_if_unmatched:
+            # The question named a real layer, so it is a question about that layer
+            # and not about a tech-file parameter. "What is the width of P-VIAT?"
+            # answered with "that parameter is not one of the 30 measured here" is
+            # the wrong branch replying, and it looks like the layer is unknown.
+            return None
         names = ", ".join(list(params["parameters"])[:8])
         return (f"That parameter is not one of the {len(params['parameters'])} measured "
                 f"here. The measured ones include: {names}.")
@@ -1063,10 +1140,19 @@ def answer(metadata: dict[str, Any], question: str) -> str | None:
     # size accepts the premise by ignoring it - the whole point of that question is
     # that the conclusion does not follow. Note "interconnect" does not trip the
     # connectivity guard: \b fails inside the word.
-    if TECHPARAM_TRIGGER.search(q) and not CONNECTIVITY_WORDS.search(q):
-        reply = _techparam_answer(
-            (metadata.get("classification") or {}).get("tech_parameters")
-            or metadata.get("tech_parameters"), q)
+    _params = ((metadata.get("classification") or {}).get("tech_parameters")
+               or metadata.get("tech_parameters"))
+    if (TECHPARAM_TRIGGER.search(q) or _names_a_parameter(_params, question)) \
+            and not CONNECTIVITY_WORDS.search(q):
+        # A question that names a real layer and asks for a plain geometric quantity
+        # belongs to that layer's measurements, whatever the parameter table happens
+        # to fuzzy-match. Without this, "the width of pviat" answered with the via
+        # parameter block while "the width of p-viat" answered with the layer's
+        # measured width - the same question, two answers, decided by a hyphen.
+        # Words from the parameter table's own vocabulary keep it here.
+        named = _mentioned_layer(question, layers)
+        reply = _techparam_answer(_params, q, defer_if_unmatched=bool(named),
+                                  defer_to_layer=bool(named))
         if reply:
             return reply
 
@@ -1494,4 +1580,208 @@ def answer_comparison(comparison: dict[str, Any], question: str) -> str | None:
                           "position — analyze the .gds files to compare geometry."]
     for w in comparison.get("warnings", []):
         lines += ["", f"_{w}_"]
+    return "\n".join(lines)
+
+
+# --- the last resort --------------------------------------------------------
+# Nothing above claimed the question and the model is unavailable or declined. The
+# wrong thing to do here is emit "AI narrative is disabled", which tells the user
+# about our configuration instead of about their layout. The right thing is to answer
+# with what *is* measured about whatever the question is about, and to name what would
+# be needed for the rest. Same rule as everywhere else: no number that was not
+# measured, no verdict the inputs cannot support.
+
+_TOPICS: tuple[tuple[str, str, str], ...] = (
+    (r"\bopc\b|\bedge length\b|\bperimeter\b|\blitho\w*|\bprintab\w*|\bmask data\b",
+     "drawn edge length",
+     "Edge length is the drawn perimeter; OPC itself needs litho models and a "
+     "recipe, which are not in a layout."),
+    (r"\baspect ratio\b|\btall\w*\b|\bshape of the cell\b",
+     "cell proportions", ""),
+    (r"\bdouble[- ]?height\b|\bmulti[- ]?height\b|\bsingle[- ]?height\b|\bcell height\b",
+     "cell height", ""),
+    (r"\bgap\b|\bspac\w*|\bclearance\b|\bpitch limit\b",
+     "spacing", "Whether a gap is legal needs the rule for that layer pair."),
+    (r"\bheadroom\b|\broom\b|\bspace (?:for|left)\b|\bfit\b|\bfree track\w*",
+     "routing space",
+     "Whether something fits also needs the rule set for the layer you would draw on."),
+    (r"\bsymmetr\w*|\bmirror\w*",
+     "symmetry", "Symmetry detection is not implemented."),
+    (r"\bwid\w*|\bnarrow\w*|\bthick\w*|\bthin\w*", "widths", ""),
+    (r"\barea\b|\bdensit\w*|\bcoverage\b", "area and density", ""),
+    (r"\bshrink\w*|\bgrow\b|\bresize\b|\bone cpp\b|\bcpp\b|\bpitch\b", "pitch", ""),
+    (r"\bnet\w*|\bconnect\w*|\bshort\w*|\bopen\w*|\brout\w*", "connectivity",
+     "Whether the connectivity is *correct* is LVS, which needs a schematic."),
+)
+
+
+def _topic(question: str) -> tuple[str, str] | None:
+    q = question.lower()
+    for pattern, label, caveat in _TOPICS:
+        if re.search(pattern, q):
+            return label, caveat
+    return None
+
+
+def _facts_for_topic(metadata: dict[str, Any], label: str,
+                     named: str | None) -> list[str]:
+    """The measured lines that bear on this topic. Never a derived figure."""
+    layout = metadata.get("layout") or {}
+    design = metadata.get("design") or {}
+    # The geometric fields - widths, spacings, perimeters - are on the measurement
+    # rows, not on the parser's layer list. Reading the wrong one reports "nothing
+    # measured" about a layout that measured all of it.
+    measured = (metadata.get("measurements") or {}).get("layers") or []
+    layers = measured or metadata.get("layers", [])
+    rows = [r for r in layers if r.get("shape_count")]
+    if named:
+        rows = _rows_for(named, layers) or rows
+    out: list[str] = []
+
+    def extreme(key: str, note: str, biggest: bool) -> str | None:
+        have = [r for r in rows if r.get(key) is not None]
+        if not have:
+            return None
+        pick = (max if biggest else min)(have, key=lambda r: r[key])
+        return f"`{pick['name']}` at {_fmt_um(pick[key])}{note}"
+
+    width, height = layout.get("width_um"), layout.get("height_um")
+    if label == "cell proportions":
+        if width and height:
+            out.append(f"the drawn extent is {width:g} × {_fmt_um(height)}")
+        # Quoted, not divided here: the analyzer measured it and the page shows it.
+        if layout.get("aspect_ratio") is not None:
+            out.append(f"width ÷ height = {layout['aspect_ratio']:g}")
+    elif label == "cell height":
+        cls = (metadata.get("classification") or {}).get("cell_height") or {}
+        if cls.get("height"):
+            out.append(f"cell height reads as {cls['height']}"
+                       + (f" — {cls['basis']}" if cls.get("basis") else ""))
+        if height:
+            out.append(f"the drawn height is {_fmt_um(height)}")
+    elif label == "drawn edge length":
+        # Per layer, and no grand total: nothing measured a sum across layers, and
+        # adding them up here would put a figure on screen that no table can confirm.
+        top = sorted((r for r in rows if r.get("perimeter_um")),
+                     key=lambda r: -r["perimeter_um"])[:4]
+        for row in top:
+            out.append(f"`{row['name']}` has {_fmt_um(row['perimeter_um'])} of drawn "
+                       f"perimeter over {row['shape_count']} shape(s)")
+        if top:
+            out.append(f"measured per layer across {len(rows)} drawn layer(s) — the "
+                       f"Browse shapes tool lists every one")
+    elif label == "spacing":
+        tight = extreme("observed_min_space_um", "", False)
+        if tight:
+            out.append(f"the smallest measured gap between separate shapes is on {tight}")
+    elif label == "widths":
+        thin = extreme("observed_min_width_um", "", False)
+        if thin:
+            out.append(f"the narrowest measured width is on {thin}")
+    elif label == "area and density":
+        dense = [r for r in (metadata.get("layers") or [])
+                 if r.get("density_percent") is not None]
+        if dense:
+            top = max(dense, key=lambda r: r["density_percent"])
+            out.append(f"the densest layer over the cell box is `{top['name']}` at "
+                       f"{top['density_percent']:g}%")
+        area = layout.get("area_um2") or layout.get("bbox_area_um2")
+        if area:
+            out.append(f"the cell box is {area:g} µm²")
+    elif label == "routing space":
+        tracks = (metadata.get("classification") or {}).get("routing_tracks") or {}
+        if tracks.get("tracks_used") is not None:
+            out.append(f"{tracks['tracks_used']} of "
+                       f"{tracks.get('tracks_total') or tracks['tracks_used']} "
+                       f"M0 tracks carry metal")
+        tight = extreme("observed_min_space_um", "", False)
+        if tight:
+            out.append(f"the tightest measured gap today is on {tight}")
+    elif label == "pitch":
+        pitch = (metadata.get("pitch") or {})
+        gate = (pitch.get("gate") or {}).get("pitch_nm")
+        if gate:
+            out.append(f"the gate pitch (CPP) is {gate:g} nm")
+        for metal in ("M0", "M1", "M2"):
+            row = (pitch.get("metals") or {}).get(metal) or {}
+            if row.get("pitch_nm"):
+                out.append(f"{metal} pitch is {row['pitch_nm']:g} nm")
+    elif label == "connectivity":
+        nets = (metadata.get("connectivity") or {}).get("nets") or {}
+        if nets.get("net_count") is not None:
+            out.append(f"{nets['net_count']} physical net(s) were extracted from the "
+                       f"stated connection stack")
+    elif label == "symmetry":
+        if design.get("polygon_count") is not None:
+            out.append(f"the layout holds {design['polygon_count']} polygons across "
+                       f"{len(rows)} drawn layer(s)")
+    return out
+
+
+def last_resort(metadata: dict[str, Any], question: str) -> str:
+    """Always an answer, always from measurements. Used when nothing else claimed it.
+
+    It says three things: what it can see about the topic, what the question needs
+    that a layout does not carry, and where to go next. That is what a reviewer can
+    act on; "no backend could answer" is not.
+    """
+    layers = metadata.get("layers", [])
+    named = _mentioned_layer(question, layers)
+    topic = _topic(question)
+    label, caveat = topic if topic else (None, "")
+
+    lines: list[str] = []
+    if label:
+        facts = _facts_for_topic(metadata, label, named)
+        subject = f"`{named}`" if named else "this layout"
+        if facts:
+            lines.append(f"I do not have a direct answer to that, but here is what is "
+                         f"measured about {label} in {subject}:")
+            lines += [f"- {f}" for f in facts]
+        else:
+            lines.append(f"Nothing measured here settles {label} for {subject}.")
+        if caveat:
+            lines += ["", caveat]
+    elif named:
+        measured = (metadata.get("measurements") or {}).get("layers") or layers
+        rows = _rows_for(named, measured)
+        row = rows[0] if rows else None
+        if row:
+            lines.append(f"I do not have a direct answer to that. What is measured on "
+                         f"`{named}`:")
+            for key, text, is_um in (("shape_count", "shapes", False),
+                                     ("area_um2", "total area", False),
+                                     ("observed_min_width_um", "narrowest width", True),
+                                     ("observed_min_space_um", "smallest gap", True),
+                                     ("perimeter_um", "perimeter", True)):
+                if row.get(key) is None:
+                    continue
+                if key == "area_um2":
+                    lines.append(f"- {text}: {row[key]:g} µm²")
+                elif is_um:
+                    lines.append(f"- {text}: {_fmt_um(row[key])}")
+                else:
+                    lines.append(f"- {text}: {row[key]}")
+    else:
+        design = metadata.get("design") or {}
+        layout = metadata.get("layout") or {}
+        drawn = [r for r in ((metadata.get("measurements") or {}).get("layers")
+                             or layers) if r.get("shape_count")]
+        lines.append("I do not have a measurement that answers that. What this file "
+                     "does settle:")
+        if design.get("polygon_count") is not None:
+            lines.append(f"- {design['polygon_count']} polygons on "
+                         f"{len(drawn)} drawn layers")
+        if layout.get("width_um") and layout.get("height_um"):
+            lines.append(f"- a drawn extent of {layout['width_um']:g} × "
+                         f"{_fmt_um(layout['height_um'])}")
+        nets = (metadata.get("connectivity") or {}).get("nets") or {}
+        if nets.get("net_count") is not None:
+            lines.append(f"- {nets['net_count']} physical net(s)")
+
+    lines += ["", "Ask about a layer by name, a dimension, spacing, density, pitch, "
+                  "nets, vias or labels and it will be answered from the geometry. "
+                  "Anything needing a schematic, a timing library or process "
+                  "constants needs that file first — the tools under **More tools** "
+                  "say which."]
     return "\n".join(lines)

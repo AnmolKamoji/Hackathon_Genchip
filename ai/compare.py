@@ -573,8 +573,12 @@ def answer_pair(context: dict[str, Any], question: str,
                 f"{impact.get('caveat', '')}")
 
     # --- where -----------------------------------------------------------------
+    # This locates the *differences*, so it only claims the question when the
+    # question is about them. "Where is the widest metal?" is about one layout, and
+    # answering it with a ranked list of XOR regions is a different question's answer.
     if re.search(r"\bwhere\b|\blocation\w*|\bcoordinat\w*|\bwhich part|\bnavigat\w*|"
-                 r"\bhot ?spot|\bcorner\b|\bwhereabouts\b|\bshow me\b", q):
+                 r"\bhot ?spot|\bcorner\b|\bwhereabouts\b|\bshow me\b", q) \
+            and (about_the_pair or re.search(r"\bdiff\w*|\bchang\w*|\bxor\b", q)):
         ranked = sorted(((loc["area_um2"], r["name"], loc) for r in changed
                          for loc in r["xor"]["locations"]),
                         key=lambda t: (-t[0], t[1]))[:6]

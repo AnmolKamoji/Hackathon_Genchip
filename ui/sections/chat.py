@@ -26,8 +26,9 @@ import streamlit as st
 
 from ai.compare import answer_pair, is_pair_question
 from ai.deterministic import answer as deterministic_answer
-from ai.deterministic import answer_comparison, answer_xor, is_comparison_question
-from ai.llm import ask_llm, provider_status
+from ai.deterministic import (answer_comparison, answer_xor,
+                              is_comparison_question, last_resort)
+from ai.llm import DISABLED_MESSAGE, FAILURE_PREFIX, ask_llm, provider_status
 from analyzer.comparison import compare_metadata
 from ui.theme import section
 
@@ -50,6 +51,11 @@ def enriched_metadata(doc: dict[str, Any]) -> dict[str, Any]:
     reading the same numbers they are.
     """
     meta = dict(doc.get("metadata") or {})
+    # The document's layout block carries figures the parser's does not - the aspect
+    # ratio among them. Attaching it keeps the chat quoting a measured value rather
+    # than dividing two of them itself, which is the line this whole design holds.
+    if doc.get("layout"):
+        meta["layout"] = {**(meta.get("layout") or {}), **doc["layout"]}
     meta["connectivity"] = doc.get("connectivity")
     meta["hierarchy"] = doc.get("hierarchy")
     meta["measurements"] = doc.get("measurements")
@@ -102,6 +108,12 @@ def pair_context(doc_a: dict[str, Any], doc_b: dict[str, Any],
     return {"xor": xor_detail or {}, "a": side(doc_a), "b": side(doc_b)}
 
 
+def _names_a_layer(metadata: dict[str, Any], question: str) -> bool:
+    """Does the question name one of this layout's layers, however it was spelled?"""
+    from ai.deterministic import _mentioned_layer
+    return bool(_mentioned_layer(question, metadata.get("layers") or []))
+
+
 def answer_for(question: str, metadata: dict[str, Any],
                history: list | None = None,
                pair: dict[str, Any] | None = None,
@@ -140,7 +152,11 @@ def answer_for(question: str, metadata: dict[str, Any],
     # Nothing about one layout claimed it either, so let the pair try before the
     # model does: "any IR drop concern?" names neither file and is still answerable
     # from what was measured in both.
-    if pair and not about_the_pair:
+    #
+    # Held back when the question names a layer: the pair has a branch for "where
+    # are the differences?", and "where is the widest metal?" reaching it answers a
+    # question about one layer with a list of XOR regions.
+    if pair and not about_the_pair and not _names_a_layer(metadata, question):
         reply = answer_pair(pair, question, about_the_pair=False)
         if reply:
             return reply
@@ -161,7 +177,14 @@ def answer_for(question: str, metadata: dict[str, Any],
         context = {"comparison": comparison}
     else:
         context = metadata
-    return ask_llm(context, question, history=history or [])
+
+    reply = ask_llm(context, question, history=history or [])
+    # The model is the right answerer for a question no branch claimed - it rephrases
+    # measurements it was handed. When it is not there, saying so is a statement about
+    # our configuration, not about the layout. Answer from the measurements instead.
+    if not reply or reply.startswith(FAILURE_PREFIX) or reply == DISABLED_MESSAGE:
+        return last_resort(metadata, question)
+    return reply
 
 
 def render(documents: list[dict[str, Any]],

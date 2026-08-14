@@ -27,6 +27,7 @@ could carry it, and a number would have to come from somewhere other than this f
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -788,8 +789,24 @@ def parameter(result: dict[str, Any], name: str) -> dict[str, Any] | None:
     for key, value in params.items():
         if key.lower() == needle:
             return value
-    # Longest match first, so "N-poly width" is not shadowed by "poly width".
-    for key in sorted(params, key=len, reverse=True):
-        if needle in key.lower() or key.lower() in needle:
+
+    # Everything below compares with case and every separator dropped, because
+    # "N-diffcon width", "n diffcon width", "N Diffcon Width" and "ndiffconwidth"
+    # are one parameter typed four ways. Nobody should have to guess the hyphen.
+    flat = lambda s: re.sub(r"[^a-z0-9]+", "", s.lower())     # noqa: E731
+    loose = flat(needle)
+    if not loose:
+        return None
+    if not (candidates := [(k, flat(k)) for k in params if flat(k)]):
+        return None
+
+    for key, key_flat in candidates:
+        if key_flat == loose:
             return params[key]
-    return None
+    # The longest match wins, and that ordering is the point rather than a detail:
+    # "n diffcon width" contains the parameter `diffcon`, so a first-match-wins scan
+    # answers a width question with via geometry. "ndiffconwidth" is 13 characters of
+    # agreement against 7, so it is the parameter being asked for.
+    best = max((c for c in candidates if c[1] in loose or loose in c[1]),
+               key=lambda c: len(c[1]), default=None)
+    return params[best[0]] if best else None
