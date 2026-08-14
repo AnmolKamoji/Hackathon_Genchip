@@ -600,8 +600,12 @@ def render_focus(uploads, layermap: dict | None, stack: dict | None,
                 st.error(f"Could not read the geometry: {ea or eb}")
                 return
             detail = xor_for(focus["a"], focus["b"]) if xor_for else {}
+            # Expanding the overlay opens the overlay, not the pair beside it: the
+            # two answer different questions and the one that was asked for is the
+            # one to fill the screen with.
             compare_panel(detail or {}, oa, ob, colours, focus["a"], focus["b"],
-                          key="ws_cmp", height=700, expandable=False)
+                          key="ws_cmp", height=760, expandable=False,
+                          side_by_side=not focus.get("overlay"))
             return
 
         name = focus.get("title") or names[0]

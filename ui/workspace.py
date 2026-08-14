@@ -135,6 +135,7 @@ def compare_panel(xor: dict[str, Any], outlines_a: dict[str, Any],
             st.rerun()
 
     if not side_by_side:
+        # The overlay on its own, which is what the expanded overlay asks for.
         render_viewer(payload, height=height, key=key)
         return None
 
@@ -153,6 +154,16 @@ def compare_panel(xor: dict[str, Any], outlines_a: dict[str, Any],
         render_viewer(payload, height=height, key=f"{key}_pair", dual=True)
 
     with st.expander("Overlay the two — A+B, XOR, wipe and blink in one view"):
+        if expandable:
+            # Its own Expand, because the overlay is where the differences are read
+            # and an expander is the smallest place on the page to read them in.
+            bar = st.columns([5, 1.15])
+            bar[0].markdown(f"**A+B overlay** — {name_a} → {name_b}, "
+                            f"{payload['summary']['regionCount']} differing region(s)")
+            if bar[1].button("⤢ Expand", key=f"{key}_overlay_expand", width="stretch",
+                             help="Full-screen overlay with the chatbot beside it"):
+                request_focus("compare", key=key, a=name_a, b=name_b, overlay=True)
+                st.rerun()
         render_viewer(payload, height=height, key=key)
     return event
 
@@ -172,7 +183,10 @@ def workspace(request: dict[str, Any], render_view: Callable[[], None],
         st.rerun()
     bar[1].markdown(
         f"### {request.get('title') or request.get('a', '')}"
-        + (f" → {request['b']}" if request.get("b") else ""))
+        + (f" → {request['b']}" if request.get("b") else "")
+        # Both comparison views open under the same two names, so the heading has to
+        # say which one is on screen.
+        + (" — overlay" if request.get("overlay") else ""))
     if edit_bar:
         edit_bar(bar[2])
 

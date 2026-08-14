@@ -327,3 +327,39 @@ def test_a_tool_asked_for_in_the_comparison_appears_there(run_app):
     assert "tool_close_cmp" in _keys(at)
     # ...and not under the Inspect viewer for B.
     assert f"tool_close_{B}" not in _keys(at)
+
+
+def test_the_overlay_can_be_expanded_on_its_own(run_app):
+    """The overlay answers "where exactly do they differ?" and lives in an expander,
+    which is the smallest place on the page to read it. It gets its own Expand."""
+    at = run_app([A, B])
+    assert "cmp_overlay_expand" in _keys(at)
+    at.button(key="cmp_overlay_expand").click().run()
+    assert at.session_state["gv_focus"] == {"kind": "compare", "key": "cmp",
+                                            "a": A, "b": B, "overlay": True}
+    assert f"### {A} → {B} — overlay" in _headings(at)
+    assert [c.key for c in at.chat_input] == ["ws_input"]
+
+
+def test_the_two_comparison_views_expand_to_different_things(run_app):
+    """Expanding the pair opens the pair; expanding the overlay opens the overlay."""
+    def expanders(at):
+        return [e.label for e in at.get("expander")]
+
+    pair = run_app([A, B], gv_focus={"kind": "compare", "key": "cmp", "a": A, "b": B})
+    overlay = run_app([A, B], gv_focus={"kind": "compare", "key": "cmp",
+                                        "a": A, "b": B, "overlay": True})
+    # The pair view carries the side-by-side's own overlay expander; the overlay view
+    # does not, because the overlay is what is already filling the screen.
+    assert any("Overlay the two" in label for label in expanders(pair))
+    assert not any("Overlay the two" in label for label in expanders(overlay))
+    assert "— overlay" in _headings(overlay)
+    assert "— overlay" not in _headings(pair)
+
+
+def test_the_overlay_workspace_chat_answers_about_the_pair(run_app):
+    at = run_app([A, B], gv_focus={"kind": "compare", "key": "cmp", "a": A, "b": B,
+                                   "overlay": True})
+    at.chat_input(key="ws_input").set_value("Which layers changed?").run()
+    reply = at.session_state["ws_chat"][-1]["content"]
+    assert "M0" in reply and "VIA0" in reply
