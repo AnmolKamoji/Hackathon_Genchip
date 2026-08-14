@@ -32,6 +32,7 @@ from analyzer.layermap import default_layermap, load_lyp
 from analyzer.netlist import extract as extract_netlist
 from analyzer.parasitics import wire_geometry
 from analyzer.xor_diff import compare_many, xor_compare
+from ui import landing
 from ui.sections import (changes, chat, comparison, impact, inspect, revision,
                          summary, tools)
 from ui.theme import CSS
@@ -41,11 +42,15 @@ load_dotenv(Path(__file__).resolve().parent / ".env")
 st.set_page_config(page_title="GDS Design Reviewer", page_icon="◧", layout="wide",
                    initial_sidebar_state="collapsed")
 st.markdown(CSS, unsafe_allow_html=True)
+landing.styles()
 
-st.markdown(
-    '<div class="title-row"><h1>◧ GDS Design Reviewer</h1>'
-    '<span class="sub">deterministic geometry · measured, never guessed</span></div>',
-    unsafe_allow_html=True)
+# Whether anything has been uploaded decides what the page is: a landing page over a
+# moving routing grid, or the review surface with the grid gone. That is not known
+# until the uploader has run, and the uploader belongs *below* the headline - so the
+# top of the page is reserved now and filled in once the answer is in. Reading it from
+# the widget's session-state key instead would be one rerun behind on the first upload.
+_backdrop_slot = st.empty()
+_masthead_slot = st.empty()
 
 
 # --- the two authoritative inputs, loaded automatically ----------------------
@@ -76,19 +81,29 @@ if layermap_error or not layermap:
              f"numbers would produce confident wrong answers.")
     st.stop()
 
-st.caption(f"Layer map `{layermap['file']}` — {layermap['entry_count']} technology "
-           f"layer names, loaded automatically. "
-           + ("Design rule catalogue loaded." if rules_available()
-              else "**No design rule catalogue**, so no rule will be checked — this "
-                   "is not a clean rule result."))
+_status_slot = st.empty()
+st.markdown('<div class="gv-landing">', unsafe_allow_html=True)
+uploads = st.file_uploader(
+    "Upload GDS files", type=["gds"], accept_multiple_files=True,
+    help="Nothing leaves this machine. The .lyp and the rule catalogue are "
+         "already loaded.")
+st.markdown('</div>', unsafe_allow_html=True)
 
-uploads = st.file_uploader("Upload GDS files", type=["gds"],
-                           accept_multiple_files=True)
+# Now the answer is known, so the reserved slots above can be filled.
+landing.masthead(_backdrop_slot, _masthead_slot, _status_slot, layermap,
+                 rules_available(), has_files=bool(uploads))
+
 if not uploads:
-    st.info("Upload one or more `.gds` files. `data/samples/` holds five real "
-            "standard cells; `NR2D1_1_RT_4.gds` and `NR2D1_2_RT_4.gds` are two "
-            "revisions of the same cell.")
+    st.caption("`data/samples/` holds five real standard cells — "
+               "`NR2D1_1_RT_4.gds` and `NR2D1_2_RT_4.gds` are two revisions of the "
+               "same cell, so they show the comparison.")
     st.stop()
+
+# A new set of files means a new page. Streamlit keeps the old scroll position, and
+# with the chat input at the bottom of a long page that left the reader at the end of
+# the analysis rather than the start of it. The same signal says an analysis is about
+# to run, which is the only time the scan line is worth the space it takes.
+_fresh = landing.keep_at_top("|".join(sorted(u.name for u in uploads)))
 
 
 # --- analysis: once per file, cached on its bytes ----------------------------
@@ -174,12 +189,24 @@ def chat_extras(gds_bytes: bytes, filename: str):
 
 
 names = tuple(u.name for u in uploads)
+
+# The scan line, while the layouts are being read. It is emptied the moment the last
+# document is built, so it marks the wait and nothing else - a progress indicator that
+# outlives the work it described is worse than none. On a rerun of an already-analysed
+# set there is nothing to wait for, so no slot is reserved and no gap is left behind.
+_reading = st.empty() if _fresh else None
+if _reading is not None:
+    with _reading:
+        landing.reading()
+
 documents = []
 for upload in uploads:
     try:
         documents.append(analyse(tools.file_bytes(upload), upload.name, names))
     except Exception as exc:
         st.error(f"Failed to analyze {upload.name}: {exc}")
+if _reading is not None:
+    _reading.empty()
 if not documents:
     st.stop()
 

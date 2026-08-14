@@ -363,3 +363,78 @@ def test_the_overlay_workspace_chat_answers_about_the_pair(run_app):
     at.chat_input(key="ws_input").set_value("Which layers changed?").run()
     reply = at.session_state["ws_chat"][-1]["content"]
     assert "M0" in reply and "VIA0" in reply
+
+
+# --- the landing page, the backdrop and the loading state --------------------
+
+def _html(at) -> str:
+    """The rendered bodies, with the stylesheets left out.
+
+    Every class name this page uses also appears in a `<style>` block, so a search
+    over all the markdown would find `title-row` on the landing page and `gv-reading`
+    on a page that is not reading anything.
+    """
+    return " ".join(m.value for m in at.markdown if "<style>" not in m.value)
+
+
+def test_the_landing_page_is_what_an_empty_session_shows(run_app, monkeypatch):
+    """No files: the hero over the moving grid, and none of the review furniture."""
+    monkeypatch.setattr(st, "file_uploader", lambda *a, **k: None)
+    at = AppTest.from_file(str(APP), default_timeout=900).run()
+    assert not at.exception, [e.value for e in at.exception]
+    html = _html(at)
+    assert "gv-backdrop" in html            # the animation is on the page
+    assert "gv-hero" in html                # ...and so is the hero
+    assert html.count("gv-card") >= 4       # the four capability cards
+    assert "title-row" not in html          # the masthead belongs to the review page
+    assert "is-retiring" not in html        # nothing to fade out yet
+
+
+def test_the_backdrop_retires_once_a_file_is_open(run_app):
+    html = _html(run_app([A, B]))
+    assert "is-retiring" in html            # the fade-out plays exactly once
+    assert "gv-hero" not in html            # the hero is gone
+    assert "title-row" in html              # the masthead has taken its place
+
+
+def test_the_stylesheets_travel_alone(run_app):
+    """Streamlit drops a <style> tag when the same markdown carries other markup, so
+    the stylesheet has to be its own element - and an st.empty() slot holds one
+    element, so it cannot live in one of those either."""
+    at = run_app([A, B])
+    sheets = [m.value for m in at.markdown if "gv-backdrop {" in m.value]
+    assert len(sheets) == 1, "the backdrop stylesheet must be exactly one element"
+    assert "<div" not in sheets[0], "a stylesheet element must carry nothing else"
+    for needed in ("gv-hero h1", "gv-reading", "gv-card"):
+        assert needed in sheets[0], needed
+
+
+def test_the_scan_line_is_reserved_only_while_a_new_set_is_read(run_app):
+    """It marks the wait and nothing else: a progress indicator that outlives the work
+    it described is worse than none.
+
+    The element itself is transient - it is emptied the moment the last document is
+    built - so what is asserted here is the decision that gates it. The one signal
+    covers both jobs: a changed upload set is exactly when an analysis runs and
+    exactly when the page must be returned to the top.
+    """
+    from ui.landing import READING
+
+    at = run_app([A, B])
+    assert at.session_state["gv_scroll_signature"] == f"{A}|{B}"   # it fired
+    at.run()
+    assert at.session_state["gv_scroll_signature"] == f"{A}|{B}"   # and not again
+    # The markup it would render, and the stylesheet that makes it move.
+    assert "gv-reading" in READING and "<style>" not in READING
+    sheet = next(m.value for m in at.markdown if "gv-backdrop {" in m.value)
+    assert "gv-scan" in sheet and "animation: gv-scan" in sheet
+
+
+def test_the_page_is_returned_to_the_top_when_the_set_changes(run_app):
+    at = run_app([A, B])
+    assert at.session_state["gv_scroll_signature"] == f"{A}|{B}"
+    before = len(at.get("html"))
+    at.run()
+    # No second scroll script on a rerun of the same set - that would fight anyone
+    # who had scrolled down to read.
+    assert len(at.get("html")) < before or before == 0
