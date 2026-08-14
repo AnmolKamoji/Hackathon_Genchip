@@ -1096,6 +1096,7 @@
         ["drc", "DRC", "The bundled catalogue, or your own deck"],
         ["lvs", "LVS", "Against a schematic netlist you supply"],
         ["netlist", "Netlist", "Devices, nets and a SPICE export"],
+        ["parasitics", "Parasitics", "Wire length, coupling and via count; R and C with a process file"],
         ["stack3d", "2.5D view", "Needs a layer stack: elevation and thickness"],
         ["density", "Density map", "Coverage per window"],
         ["diff", "Diff", "Structural: cells, shapes, instances, texts"],

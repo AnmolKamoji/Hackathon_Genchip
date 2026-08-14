@@ -405,3 +405,72 @@ def technology_panel(state: dict[str, Any]) -> None:
         "Everything a <b>.gds</b> and a <b>.lyp</b> can answer is answered without any "
         "of these. The rest each need one file, and each tool says which."),
         unsafe_allow_html=True)
+
+
+# --- parasitics -------------------------------------------------------------
+
+def parasitics_panel(geometry: dict[str, Any], rc: dict[str, Any] | None) -> None:
+    """What the layout says about R and C, and what it cannot say.
+
+    The split is the point. Length, width, area, spacing and via count are measured;
+    resistivity, thickness, permittivity and dielectric height are not in a GDSII and
+    are not guessed here.
+    """
+    totals = geometry["totals"]
+    columns = st.columns(4)
+    columns[0].metric("Wire length", f"{totals['wire_length_um']:g} µm")
+    columns[1].metric("Metal area", f"{totals['metal_area_um2']:g} µm²")
+    columns[2].metric(f"Coupling run ≤{geometry['coupling_window_nm']:g} nm",
+                      f"{totals['coupling_run_um']:g} µm")
+    columns[3].metric("Vias", geometry["via_total"])
+
+    st.dataframe(pd.DataFrame([{
+        "layer": name,
+        "shapes": row["shapes"],
+        "length (µm)": row["total_length_um"],
+        "min width (µm)": row["min_width_um"],
+        "area (µm²)": row["area_um2"],
+        "perimeter (µm)": row["perimeter_um"],
+        "coupling run (µm)": row["coupling_run_um"],
+        "closest spacing (nm)": row["closest_spacing_nm"],
+    } for name, row in geometry["conductors"].items()]),
+        width="stretch", hide_index=True, key="parasitic_geometry")
+
+    if rc and rc.get("available"):
+        st.markdown("**With the supplied process constants**")
+        figures = st.columns(3)
+        figures[0].metric("Resistance", f"{rc['totals']['resistance_ohm']:g} Ω",
+                          help="Wire squares × sheet resistance, plus the vias")
+        figures[1].metric("Via resistance", f"{rc['totals']['via_resistance_ohm']:g} Ω")
+        figures[2].metric("Capacitance", f"{rc['totals']['capacitance_fF']:g} fF",
+                          help="Area, fringe and coupling terms")
+        st.dataframe(pd.DataFrame(rc["layers"]), width="stretch", hide_index=True,
+                     key="parasitic_rc")
+        if rc["vias"]:
+            st.dataframe(pd.DataFrame(rc["vias"]), width="stretch", hide_index=True,
+                         key="parasitic_via_rc")
+        if rc["unpriced_layers"]:
+            st.warning("Not priced by that file, so not counted: "
+                       + ", ".join(rc["unpriced_layers"]))
+        for key, text in rc["not_derivable"].items():
+            st.caption(f"*{key.replace('_', ' ')}* — {text}")
+    else:
+        st.info("**Ohms and farads need the process constants.** "
+                "R = ρ·L/(W·T) needs resistivity and metal thickness; C needs the "
+                "permittivity and the dielectric height. Those live in an ITF or "
+                "technology file, not in a layout. Upload one above and the same "
+                "geometry becomes ohms and farads.")
+        with st.expander("Process file format"):
+            st.code(json.dumps({
+                "technology": "my process",
+                "layers": {"M1": {"sheet_resistance_ohm_sq": 45,
+                                  "area_cap_aF_per_um2": 40,
+                                  "fringe_cap_aF_per_um": 20,
+                                  "coupling_cap_aF_per_um": 65}},
+                "vias": {"VIA0": {"resistance_ohm": 15}},
+            }, indent=2), language="json")
+            st.caption("`sheet_resistance_ohm_sq` is ρ/T — the two constants a layout "
+                       "cannot give you, already combined, and what a technology file "
+                       "actually states.")
+    for key, text in geometry["not_derivable"].items():
+        st.caption(f"*{key}* — {text}")

@@ -1,0 +1,84 @@
+{
+  "technology": "EXAMPLE - illustrative constants, not a real process",
+  "_comment": [
+    "R = rho*L/(W*T) and C = f(eps, W, S, H). The layout supplies L, W and S; this",
+    "file supplies the rest. The numbers below are plausible for an advanced node",
+    "but they are made up. Replace them with your ITF/ICT values before quoting an",
+    "ohm or a farad from this tool.",
+    "sheet_resistance_ohm_sq is rho/T - the two constants a layout cannot give you,",
+    "already combined, and it is what a technology file actually states."
+  ],
+  "layers": {
+    "M0": {
+      "sheet_resistance_ohm_sq": 60,
+      "area_cap_aF_per_um2": 45,
+      "fringe_cap_aF_per_um": 22,
+      "coupling_cap_aF_per_um": 70
+    },
+    "M1": {
+      "sheet_resistance_ohm_sq": 45,
+      "area_cap_aF_per_um2": 40,
+      "fringe_cap_aF_per_um": 20,
+      "coupling_cap_aF_per_um": 65
+    },
+    "M2": {
+      "sheet_resistance_ohm_sq": 40,
+      "area_cap_aF_per_um2": 38,
+      "fringe_cap_aF_per_um": 19,
+      "coupling_cap_aF_per_um": 60
+    },
+    "BM0": {
+      "sheet_resistance_ohm_sq": 25,
+      "area_cap_aF_per_um2": 30,
+      "fringe_cap_aF_per_um": 15,
+      "coupling_cap_aF_per_um": 40
+    },
+    "NDIFFCON": {
+      "sheet_resistance_ohm_sq": 120,
+      "area_cap_aF_per_um2": 55,
+      "fringe_cap_aF_per_um": 25,
+      "coupling_cap_aF_per_um": 80
+    },
+    "PDIFFCON": {
+      "sheet_resistance_ohm_sq": 120,
+      "area_cap_aF_per_um2": 55,
+      "fringe_cap_aF_per_um": 25,
+      "coupling_cap_aF_per_um": 80
+    },
+    "NPOLY": {
+      "sheet_resistance_ohm_sq": 200,
+      "area_cap_aF_per_um2": 70,
+      "fringe_cap_aF_per_um": 30,
+      "coupling_cap_aF_per_um": 90
+    },
+    "PPOLY": {
+      "sheet_resistance_ohm_sq": 200,
+      "area_cap_aF_per_um2": 70,
+      "fringe_cap_aF_per_um": 30,
+      "coupling_cap_aF_per_um": 90
+    }
+  },
+  "vias": {
+    "VIA0": {
+      "resistance_ohm": 15
+    },
+    "VIA1": {
+      "resistance_ohm": 12
+    },
+    "N-VIAG": {
+      "resistance_ohm": 25
+    },
+    "P-VIAG": {
+      "resistance_ohm": 25
+    },
+    "N-VIAT": {
+      "resistance_ohm": 20
+    },
+    "P-VIAT": {
+      "resistance_ohm": 20
+    },
+    "DVB": {
+      "resistance_ohm": 8
+    }
+  }
+}

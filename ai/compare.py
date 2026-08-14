@@ -134,6 +134,78 @@ def _nets(connectivity: dict[str, Any] | None) -> int | None:
     return (nets.get("summary") or {}).get("net_count")
 
 
+def _fmt_pair(values, unit: str = "", digits: int = 4) -> str:
+    first, second = values
+    if first is None or second is None:
+        return "unavailable"
+    if first == second:
+        return f"identical at {first:g}{unit}"
+    change = second - first
+    share = (change / first * 100) if first else 0.0
+    return (f"{first:g}{unit} → {second:g}{unit} "
+            f"({change:+.{digits}g}{unit}, {share:+.1f}%)")
+
+
+def _parasitic_answer(context, question: str, name_a: str, name_b: str) -> str | None:
+    """R and C: the measured drivers, and the constants that are missing.
+
+    The question behind "which has more capacitance?" is answerable from geometry
+    whenever the drivers agree, and that is what an engineer reading a layout is
+    doing. What they cannot do by eye - and what this will not do either - is turn it
+    into farads without the process file.
+    """
+    geometry_a = (context.get("a") or {}).get("parasitics")
+    geometry_b = (context.get("b") or {}).get("parasitics")
+    if not geometry_a or not geometry_b:
+        return None
+
+    from analyzer.parasitics import compare_geometry
+
+    verdict = compare_geometry(geometry_a, geometry_b)
+    drivers = verdict["drivers"]
+    lines = [
+        f"Measured drivers, `{name_a}` → `{name_b}`:",
+        f"- total wire length {_fmt_pair(drivers['wire_length_um'], ' µm')}",
+        f"- metal area {_fmt_pair(drivers['metal_area_um2'], ' µm²')}",
+        f"- coupling run within "
+        f"{geometry_a.get('coupling_window_nm', 100):g} nm "
+        f"{_fmt_pair(drivers['coupling_run_um'], ' µm')}",
+        f"- vias {_fmt_pair(drivers['via_count'])}",
+        "",
+        # Already sentence-cased by the analyzer. `str.capitalize()` would lowercase
+        # everything after the first letter and turn the file names into noise.
+        verdict["resistance"],
+        verdict["capacitance"],
+    ]
+
+    estimate_a = (context.get("a") or {}).get("rc")
+    estimate_b = (context.get("b") or {}).get("rc")
+    if estimate_a and estimate_b and estimate_a.get("available"):
+        totals_a, totals_b = estimate_a["totals"], estimate_b["totals"]
+        lines += [
+            "",
+            f"With the supplied process file: resistance "
+            f"{_fmt_pair([totals_a['resistance_ohm'], totals_b['resistance_ohm']], ' Ω')}, "
+            f"capacitance "
+            f"{_fmt_pair([totals_a['capacitance_fF'], totals_b['capacitance_fF']], ' fF')}.",
+            "Lumped per layer, not a distributed network - a delay needs an extractor "
+            "and a timer, not a layout.",
+        ]
+        if estimate_a.get("unpriced_layers"):
+            lines.append("Not priced by that file, so not counted: "
+                         + ", ".join(estimate_a["unpriced_layers"]) + ".")
+    else:
+        lines += [
+            "",
+            "Ohms and farads need the process constants, and none were supplied: "
+            "R = ρ·L/(W·T) needs resistivity and thickness, C needs permittivity and "
+            "the dielectric height. Those live in an ITF or technology file, not in a "
+            "GDSII. Load one under More tools → Parasitics and the same geometry "
+            "becomes ohms and farads.",
+        ]
+    return "\n".join(lines)
+
+
 def _label_positions(meta_a, meta_b, name_a: str, name_b: str) -> str:
     """Which labels moved, appeared or disappeared, by exact coordinate.
 
@@ -186,6 +258,17 @@ def answer_pair(context: dict[str, Any], question: str) -> str | None:
     name_a = a.get("file") or "A"
     name_b = b.get("file") or "B"
     meta_a, meta_b = a.get("metadata") or {}, b.get("metadata") or {}
+
+    # --- resistance and capacitance -------------------------------------------
+    # Answered before the refusals, because "which has more capacitance?" is not the
+    # same question as "which is better": the drivers of R and C are in the file even
+    # though the constants are not. What must not happen is an invented ohm.
+    if re.search(r"\b(resistan\w*|capacitan\w*|\brc\b|parasitic\w*|coupling|"
+                 r"cross[- ]?talk|ir[- ]?drop|electromigration|\bem\b|impedance|"
+                 r"wire (?:length|load)|net length|loading)\b", q):
+        reply = _parasitic_answer(context, q, name_a, name_b)
+        if reply:
+            return reply
 
     # --- refusals first, so a judgement question never picks up a factual branch ---
     for pattern, subject, reason in JUDGEMENT:

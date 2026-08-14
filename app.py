@@ -33,6 +33,8 @@ from analyzer.connectivity import (analyze_connectivity, default_stack, extract_
                                    load_stack, stack_from_sidecar)
 from analyzer.hierarchy import analyze_hierarchy, instance_tree
 from analyzer.measurements import measure_layers, measure_vias, shape_outlines
+from analyzer.parasitics import (compare_geometry, estimate_rc,
+                                 load_process, wire_geometry)
 from analyzer.pitch import analyze_pitch
 from analyzer.fused import analyze_pair
 from analyzer.gds_parser import analyze_gds
@@ -407,6 +409,34 @@ def process_diff(a_bytes: bytes, a_name: str, b_bytes: bytes, b_name: str,
             return None, str(exc)
 
 
+@st.cache_data(show_spinner="Measuring wire geometry...")
+def process_parasitics(gds_bytes: bytes, filename: str, layermap: dict | None,
+                       stack: dict | None):
+    """The layout side of R and C: lengths, widths, areas, coupling runs, vias."""
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / filename
+        path.write_bytes(gds_bytes)
+        try:
+            return wire_geometry(path, layermap,
+                                 role_overrides=(stack or {}).get("role_overrides")), None
+        except Exception as exc:
+            return None, str(exc)
+
+
+@st.cache_data(show_spinner=False)
+def process_rc(geometry: dict | None, process_bytes: bytes | None, process_name: str):
+    """Ohms and farads, but only with the constants a layout cannot supply."""
+    if not geometry or not process_bytes:
+        return None, None
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / (process_name or "process.json")
+        path.write_bytes(process_bytes)
+        try:
+            return estimate_rc(geometry, load_process(path)), None
+        except Exception as exc:
+            return None, str(exc)
+
+
 @st.cache_data(show_spinner=False)
 def process_grid(gds_bytes: bytes, filename: str, grid_nm: float = 1.0):
     """Off-grid shapes, so "is B still on grid?" has an answer rather than a caveat."""
@@ -715,6 +745,9 @@ def pair_context(name_a: str, name_b: str, xor_detail: dict | None) -> dict:
         if classification:
             metadata["classification"] = classification
             metadata["pitch"] = classification.get("pitch")
+        parasitics, _ = process_parasitics(data, name, layermap, conn_stack)
+        rc, _ = process_rc(parasitics, st.session_state.get("process_file"),
+                           st.session_state.get("process_name", "process.json"))
         return {
             "file": name,
             "metadata": metadata,
@@ -723,6 +756,8 @@ def pair_context(name_a: str, name_b: str, xor_detail: dict | None) -> dict:
             "netlist": process_netlist(data, name, layermap,
                                        conn_stack or default_stack(layermap))[0],
             "grid": process_grid(data, name, 1.0),
+            "parasitics": parasitics,
+            "rc": rc,
         }
 
     return {"xor": xor_detail or {}, "a": side(name_a), "b": side(name_b)}
@@ -807,10 +842,11 @@ def _diff_against_upload(upload, edited: bytes) -> str | None:
             f"{um2(summary.get('total_area_added_um2') or 0, 4)} added")
 
 
-TOOL_TABS = ["Technology", "DRC", "LVS", "Netlist", "2.5D view", "Density map",
-             "Diff", "Browse shapes", "Browse instances"]
+TOOL_TABS = ["Technology", "DRC", "LVS", "Netlist", "Parasitics", "2.5D view",
+             "Density map", "Diff", "Browse shapes", "Browse instances"]
 TOOL_BY_ID = {"technology": "Technology", "drc": "DRC", "lvs": "LVS",
-              "netlist": "Netlist", "stack3d": "2.5D view", "density": "Density map",
+              "netlist": "Netlist", "parasitics": "Parasitics",
+              "stack3d": "2.5D view", "density": "Density map",
               "diff": "Diff", "xor": "Diff", "shapes": "Browse shapes",
               "instances": "Browse instances"}
 
@@ -1188,6 +1224,28 @@ def render_tool(chosen: str, tool_file: str) -> None:
             st.error(f"The netlist could not be extracted: {_netlist_error}")
         else:
             toolbench.netlist_panel(_netlist, Path(tool_file).stem)
+
+    if chosen == "Parasitics":
+        st.markdown("**The layout side of R and C.** Lengths, widths, areas, coupling "
+                    "runs and via counts are measured here; the constants that turn "
+                    "them into ohms and farads are not in a GDSII.")
+        geometry, geometry_error = process_parasitics(tool_bytes, tool_file, layermap,
+                                                     conn_stack)
+        if geometry_error:
+            st.error(geometry_error)
+        elif geometry:
+            process_upload = st.file_uploader(
+                "Process constants (.json) — sheet resistance and capacitance per layer",
+                type=["json"], key="process_upload")
+            if process_upload is not None:
+                st.session_state["process_file"] = process_upload.getvalue()
+                st.session_state["process_name"] = process_upload.name
+            rc, rc_error = process_rc(geometry,
+                                      st.session_state.get("process_file"),
+                                      st.session_state.get("process_name", "process.json"))
+            if rc_error:
+                st.error(f"The process file could not be used: {rc_error}")
+            toolbench.parasitics_panel(geometry, rc)
 
     if chosen == "2.5D view":
         _stack3d_upload = st.file_uploader("Layer stack for the 2.5D view (.json)",
