@@ -24,7 +24,7 @@ AN2D1 = SAMPLES / "AN2D1_2_RT_4.gds"
 
 def test_the_oracle_does_not_import_the_code_it_judges():
     """If the oracle used `analyzer`, it would pass every answer the analyzer gives."""
-    source = (Path(__file__).resolve().parent.parent / "tools" / "oracle.py").read_text()
+    source = (Path(__file__).resolve().parent.parent / "tools" / "oracle.py").read_text(encoding="utf-8")
     offenders = re.findall(r"^\s*(?:from|import)\s+(analyzer[\w.]*|klayout[\w.]*)",
                            source, re.M)
     assert not offenders, f"the oracle must not import: {offenders}"
@@ -243,7 +243,7 @@ def test_no_analysis_module_reads_a_rendered_image():
     """
     root = Path(__file__).resolve().parent.parent
     for module in sorted((root / "analyzer").glob("*.py")):
-        source = module.read_text()
+        source = module.read_text(encoding="utf-8")
         assert "save_image" not in source, module.name
         assert "klayout.lay" not in source, module.name
         assert "PIL" not in source and "Image.open" not in source, module.name
@@ -366,7 +366,7 @@ def test_the_transcript_survives_a_killed_run(tmp_path):
     transcript = tmp_path / "run.jsonl"
     for index in range(3):
         J.log_answer(transcript, {"question": f"q{index}", "verdict": "PASS"})
-    lines = transcript.read_text().strip().splitlines()
+    lines = transcript.read_text(encoding="utf-8").strip().splitlines()
     assert len(lines) == 3
     assert all(line.startswith("{") and line.endswith("}") for line in lines)
 
