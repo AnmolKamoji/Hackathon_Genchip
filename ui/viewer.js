@@ -2708,7 +2708,13 @@
         stage.className = "gv-hstage";
         half.appendChild(stage);
         root.appendChild(half);
-        const viewer = new NS.Viewer(stage, payload[side], { noPanel: true });
+        // Each half forwards the tool menu's requests up, tagged with the side it
+        // came from - "run the netlist" means nothing without saying on which of
+        // the two files.
+        const onEvent = this.opts.onEvent
+          ? (event) => this.opts.onEvent({ ...event, side, file: name })
+          : null;
+        const viewer = new NS.Viewer(stage, payload[side], { noPanel: true, onEvent });
         this.halves.push({ side, viewer, name });
       }
 

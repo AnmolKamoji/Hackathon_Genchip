@@ -98,10 +98,12 @@ _BRIDGE = """
     if (typeof payload === "string") payload = JSON.parse(payload);
     if (!payload) return;
     if (!view) {
-      view = window.GDSViewer.mount("gv", payload, {onEvent: send});
-    } else if (args.revision !== view.revision) {
+      var mount = args.dual ? "mountDual" : "mount";
+      view = window.GDSViewer[mount]("gv", payload, {onEvent: send});
+    } else if (args.revision !== view.revision && view.setPayload) {
       // A rerun after an edit was applied: the geometry is now what Python wrote,
       // so the drawing is replaced while the view - zoom, layers, tab - is kept.
+      // Only the single viewer is editable, so only it has this.
       view.setPayload(payload, args.revision);
     }
     view.revision = args.revision;
@@ -164,7 +166,7 @@ def render(payload: dict[str, Any], height: int = 620, key: str = "gv",
 
 
 def interactive(payload: dict[str, Any], height: int = 620, key: str = "gv",
-                revision: int = 0) -> dict[str, Any] | None:
+                revision: int = 0, dual: bool = False) -> dict[str, Any] | None:
     """Mount the viewer as a component and return whatever it last sent.
 
     The return value is the editor's doing: a committed journal of operations, or a
@@ -174,7 +176,8 @@ def interactive(payload: dict[str, Any], height: int = 620, key: str = "gv",
     """
     component = _declare(_signature())
     raw = component(payload=json.dumps(payload, separators=(",", ":"), allow_nan=False),
-                    revision=revision, height=height, key=key, default=None)
+                    revision=revision, height=height, key=key, dual=dual,
+                    default=None)
     if not raw:
         return None
     if isinstance(raw, str):

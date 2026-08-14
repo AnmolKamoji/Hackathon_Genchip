@@ -92,9 +92,11 @@ def pair_context(doc_a: dict[str, Any], doc_b: dict[str, Any],
             "netlist": extra.get("netlist"),
             "grid": extra.get("grid"),
             "parasitics": extra.get("parasitics"),
-            # Ohms and farads need process constants a layout cannot supply, and
-            # nothing on this page asks for them, so this stays unavailable.
-            "rc": None,
+            # Ohms and farads need process constants a layout cannot supply. They
+            # arrive only if the Parasitics tool was given a process file; without
+            # one this stays None and the RC answers report geometry instead of
+            # inventing a sheet resistance.
+            "rc": extra.get("rc"),
         }
 
     return {"xor": xor_detail or {}, "a": side(doc_a), "b": side(doc_b)}

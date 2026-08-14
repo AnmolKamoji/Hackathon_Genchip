@@ -102,7 +102,8 @@ def compare_panel(xor: dict[str, Any], outlines_a: dict[str, Any],
                   outlines_b: dict[str, Any], colours: dict[str, str],
                   name_a: str, name_b: str, key: str = "cmp",
                   height: int = 660, expandable: bool = True,
-                  side_by_side: bool = True) -> None:
+                  side_by_side: bool = True,
+                  interactive: bool = False) -> dict[str, Any] | None:
     """The two layouts, A on the left and B on the right.
 
     Side by side is the arrangement people actually compare in: two drawings at the
@@ -135,17 +136,25 @@ def compare_panel(xor: dict[str, Any], outlines_a: dict[str, Any],
 
     if not side_by_side:
         render_viewer(payload, height=height, key=key)
-        return
+        return None
 
     # A on the left, B in the middle, one layer panel on the right - all in a single
     # frame. The panel is shared, so a checkbox hides that layer in both drawings at
     # once; zoom, pan and rulers stay per-drawing. Splitting them across two frames
     # would put a Python round trip behind every checkbox, and the rerun would throw
     # away both zooms.
-    render_viewer(payload, height=height, key=f"{key}_pair", dual=True)
+    event = None
+    if interactive:
+        # Mounted as a component so each half's tool menu can ask the page to run a
+        # tool on that side's file. Layer toggles, zoom and pan still never reach
+        # Python: only a tool request comes back.
+        event = mount_viewer(payload, height=height, key=f"{key}_pair", dual=True)
+    else:
+        render_viewer(payload, height=height, key=f"{key}_pair", dual=True)
 
     with st.expander("Overlay the two — A+B, XOR, wipe and blink in one view"):
         render_viewer(payload, height=height, key=key)
+    return event
 
 
 def workspace(request: dict[str, Any], render_view: Callable[[], None],

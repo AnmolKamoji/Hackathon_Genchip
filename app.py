@@ -29,14 +29,12 @@ from analyzer.document import build_document
 from analyzer.drc import rules_available
 from analyzer.edit import grid_audit
 from analyzer.layermap import default_layermap, load_lyp
-from analyzer.measurements import shape_outlines
 from analyzer.netlist import extract as extract_netlist
 from analyzer.parasitics import wire_geometry
 from analyzer.xor_diff import compare_many, xor_compare
 from ui.sections import (changes, chat, comparison, impact, inspect, revision,
-                         summary)
+                         summary, tools)
 from ui.theme import CSS
-from ui.viewer_data import build as build_payload
 from ui.workspace import compare_panel, layout_panel
 
 load_dotenv(Path(__file__).resolve().parent / ".env")
@@ -105,17 +103,17 @@ def analyse(gds_bytes: bytes, filename: str, all_names: tuple[str, ...]):
                               all_filenames=list(all_names))
 
 
-@st.cache_data(show_spinner=False)
+stack = default_stack(layermap)
+
+
 def outlines_of(gds_bytes: bytes, filename: str):
     """Flattened geometry for the viewer. Cached separately: the polygons are large
-    and belong nowhere near the analysis document the sections read."""
-    with tempfile.TemporaryDirectory() as td:
-        path = Path(td) / filename
-        path.write_bytes(gds_bytes)
-        try:
-            return shape_outlines(path, layermap)
-        except Exception:
-            return None
+    and belong nowhere near the analysis document the sections read.
+
+    One cache, shared with the tool bench and the expanded workspace, so opening a
+    layout full screen re-reads nothing.
+    """
+    return tools.outlines_for(gds_bytes, filename, layermap, stack)[0]
 
 
 @st.cache_data(show_spinner="Comparing the two layouts...")
@@ -144,11 +142,37 @@ def family_xor(names: tuple[str, ...], blobs: tuple[bytes, ...]):
             return None
 
 
+# --- the chat's extra analyses ----------------------------------------------
+# Netlist, grid and wire geometry: nothing on the page displays them, only a
+# question can ask for them, and then only sometimes. Defined here because the
+# expanded workspace's chat needs them too, and that renders before the page body.
+
+@st.cache_data(show_spinner=False)
+def chat_extras(gds_bytes: bytes, filename: str):
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / filename
+        path.write_bytes(gds_bytes)
+        out = {}
+        try:
+            out["netlist"] = extract_netlist(path, layermap, stack)
+        except Exception:
+            out["netlist"] = None
+        try:
+            out["grid"] = grid_audit(path, 1.0)
+        except Exception:
+            out["grid"] = None
+        try:
+            out["parasitics"] = wire_geometry(path, layermap)
+        except Exception:
+            out["parasitics"] = None
+        return out
+
+
 names = tuple(u.name for u in uploads)
 documents = []
 for upload in uploads:
     try:
-        documents.append(analyse(upload.getvalue(), upload.name, names))
+        documents.append(analyse(tools.file_bytes(upload), upload.name, names))
     except Exception as exc:
         st.error(f"Failed to analyze {upload.name}: {exc}")
 if not documents:
@@ -156,13 +180,75 @@ if not documents:
 
 _colours = {e["technology_name"]: e.get("fill_color")
             for e in layermap.get("by_key", {}).values() if e.get("fill_color")}
+_by_name = {doc["file"]["name"]: doc for doc in documents}
+
+
+def _extras_for(*file_names: str) -> dict:
+    """The chat's extra analyses for the named files, with the geometry attached."""
+    out = {}
+    for name in file_names:
+        index = names.index(name)
+        data = tools.file_bytes(uploads[index])
+        out[name] = dict(chat_extras(data, name))
+        # Already cached from the viewer, so this costs nothing to reuse.
+        out[name]["outlines"] = outlines_of(data, name)
+        # Ohms and farads only once the Parasitics tool has been given the process
+        # constants. Until then the chat answers R and C from the geometry alone,
+        # which is the honest half of the question.
+        out[name]["rc"] = tools.rc_for(
+            out[name].get("parasitics"), st.session_state.get("process_file"),
+            st.session_state.get("process_name", "process.json"))[0]
+    return out
+
+
+def _answer(question: str) -> str:
+    """One question, answered against whatever the expanded view is showing."""
+    focus = tools.focus_request() or {}
+    if focus.get("kind") == "compare":
+        a_doc, b_doc = _by_name[focus["a"]], _by_name[focus["b"]]
+        detail = _pair_xor_by_name(focus["a"], focus["b"])
+        return chat.answer_for(
+            question, chat.enriched_metadata(a_doc),
+            history=st.session_state.get("ws_chat", [])[-6:],
+            pair=chat.pair_context(a_doc, b_doc, detail,
+                                   _extras_for(focus["a"], focus["b"])),
+            xor=detail if detail.get("comparable") else None)
+    doc = _by_name.get(focus.get("title")) or documents[0]
+    return chat.answer_for(question, chat.enriched_metadata(doc),
+                           history=st.session_state.get("ws_chat", [])[-6:])
+
+
+def _pair_xor_by_name(a_name: str, b_name: str) -> dict:
+    ia, ib = names.index(a_name), names.index(b_name)
+    return pair_xor(tools.file_bytes(uploads[ia]), a_name,
+                    tools.file_bytes(uploads[ib]), b_name)
+
+
+# The expanded workspace owns the screen when it is open, so it renders before the
+# page body and stops the script rather than being appended below it.
+if tools.render_focus(uploads, layermap, stack, _colours, _answer,
+                      xor_for=_pair_xor_by_name):
+    st.stop()
 
 
 def _layout_viewer(doc, index):
-    data = outlines_of(uploads[index].getvalue(), uploads[index].name)
-    if data:
-        layout_panel(data, key=f"lv{index}", colours=_colours,
-                     title=doc["file"]["name"], expandable=False)
+    name = uploads[index].name
+    data = tools.file_bytes(uploads[index])
+    outlines = outlines_of(data, name)
+    if not outlines:
+        return
+    # The analyses the document already holds become the viewer's markers, cell tree
+    # and routing grid; only the net *shapes* are read here, because a document
+    # carries the net graph but not the polygons needed to trace one.
+    event = layout_panel(outlines, key=f"lv{index}", colours=_colours,
+                         title=name, expandable=True, interactive=True,
+                         drc=doc.get("rules"),
+                         connectivity=tools.net_shapes_for(data, name, layermap, stack),
+                         pitch=(doc.get("classification") or {}).get("pitch"),
+                         hierarchy=doc.get("hierarchy"),
+                         tree=tools.tree_for(data, name))
+    tools.handle_tool_event(event, name)
+    tools.tool_panel(name, uploads, layermap, stack)
 
 
 # --- 1. GDS Summary ---------------------------------------------------------
@@ -186,8 +272,7 @@ if index_a == index_b:
     st.stop()
 
 a_doc, b_doc = documents[index_a], documents[index_b]
-xor = pair_xor(uploads[index_a].getvalue(), uploads[index_a].name,
-               uploads[index_b].getvalue(), uploads[index_b].name)
+xor = _pair_xor_by_name(uploads[index_a].name, uploads[index_b].name)
 
 
 @st.cache_data(show_spinner=False)
@@ -201,15 +286,21 @@ doc = comparison_document(uploads[index_a].name, uploads[index_b].name,
 
 
 def _comparison_viewer():
-    oa = outlines_of(uploads[index_a].getvalue(), uploads[index_a].name)
-    ob = outlines_of(uploads[index_b].getvalue(), uploads[index_b].name)
-    if oa and ob:
-        compare_panel(xor if xor.get("comparable") else {}, oa, ob, _colours,
-                      uploads[index_a].name, uploads[index_b].name, key="cmp",
-                      expandable=False)
+    oa = outlines_of(tools.file_bytes(uploads[index_a]), uploads[index_a].name)
+    ob = outlines_of(tools.file_bytes(uploads[index_b]), uploads[index_b].name)
+    if not (oa and ob):
+        return
+    # Each half's tool menu runs on that half's file, and the result appears here
+    # rather than inside the Inspect expander for whichever file was picked.
+    event = compare_panel(xor if xor.get("comparable") else {}, oa, ob, _colours,
+                          uploads[index_a].name, uploads[index_b].name, key="cmp",
+                          expandable=True, interactive=True)
+    tools.handle_tool_event(event, uploads[index_a].name, owner="cmp")
+    tools.tool_panel(uploads[index_a].name, uploads, layermap, stack, owner="cmp")
 
 
-family = family_xor(names, tuple(u.getvalue() for u in uploads)) if len(uploads) > 2 else None
+family = (family_xor(names, tuple(tools.file_bytes(u) for u in uploads))
+          if len(uploads) > 2 else None)
 
 comparison.render(doc, documents, index_a, index_b, xor_all=family,
                   viewer=_comparison_viewer)
@@ -229,40 +320,9 @@ impact.render_ai_summary(doc, ai_enabled=bool(os.getenv("ANTHROPIC_API_KEY")))
 # --- Ask the Layout ---------------------------------------------------------
 # The chat answers about the *pair* as well as about one file, so a question like
 # "did any pin move?" is not answered from one layout's metadata.
-@st.cache_data(show_spinner=False)
-def chat_extras(gds_bytes: bytes, filename: str):
-    """The three analyses the chat can be asked about that the document omits.
-
-    They are here rather than in the document because nothing on the page displays
-    them - only a question can ask for them, and then only sometimes.
-    """
-    with tempfile.TemporaryDirectory() as td:
-        path = Path(td) / filename
-        path.write_bytes(gds_bytes)
-        stack = default_stack(layermap)
-        out = {}
-        try:
-            out["netlist"] = extract_netlist(path, layermap, stack)
-        except Exception:
-            out["netlist"] = None
-        try:
-            out["grid"] = grid_audit(path, 1.0)
-        except Exception:
-            out["grid"] = None
-        try:
-            out["parasitics"] = wire_geometry(path, layermap)
-        except Exception:
-            out["parasitics"] = None
-        return out
-
-
 st.markdown("---")
-_extras = {}
-for _i in (index_a, index_b):
-    _name = uploads[_i].name
-    _extras[_name] = dict(chat_extras(uploads[_i].getvalue(), _name))
-    # Already cached from the viewer, so this costs nothing to reuse.
-    _extras[_name]["outlines"] = outlines_of(uploads[_i].getvalue(), _name)
 chat.render(documents,
-            pair=chat.pair_context(a_doc, b_doc, xor, _extras),
+            pair=chat.pair_context(a_doc, b_doc, xor,
+                                   _extras_for(uploads[index_a].name,
+                                               uploads[index_b].name)),
             xor=xor if xor.get("comparable") else None)
