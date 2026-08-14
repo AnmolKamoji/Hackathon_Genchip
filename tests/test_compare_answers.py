@@ -166,11 +166,22 @@ def test_polygon_count(context, lm):
         assert "unchanged" in answer
 
 
-def test_via_count_matches_the_via_layers(context, lm):
-    measurements = measure_layers(A, lm)
-    truth = sum(row["count"] for row in measure_vias(measurements)["via_layers"])
+def test_via_count_agrees_with_the_rest_of_the_page(context, lm):
+    """Vias and contacts are counted separately everywhere else, so they are counted
+    separately here.
+
+    `measure_vias` lists both under one key - summing it gives 14 where every table
+    on the page says 10 vias and 4 contacts. An answer that quotes 14 contradicts
+    the section directly above it, which is worse than saying nothing.
+    """
+    design = analyze_gds(A, layermap=lm)["design"]
     answer = ask(context, "Did the via count change?")
-    assert str(truth) in answer
+    assert f"unchanged at {design['via_count']}" in answer
+    assert f"Contacts, counted separately: unchanged at {design['contact_count']}" in answer
+
+    # And the two really are different numbers, or this test proves nothing.
+    both = sum(row["count"] for row in measure_vias(measure_layers(A, lm))["via_layers"])
+    assert both == design["via_count"] + design["contact_count"] != design["via_count"]
 
 
 def test_transistor_count_comes_from_the_extracted_netlist(context, lm):

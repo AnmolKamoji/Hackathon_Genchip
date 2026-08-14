@@ -162,7 +162,12 @@ def chat_extras(gds_bytes: bytes, filename: str):
         except Exception:
             out["grid"] = None
         try:
-            out["parasitics"] = wire_geometry(path, layermap)
+            # The stack's role overrides matter here: they make NDIFFCON and
+            # PDIFFCON local interconnect rather than contacts, which is what this
+            # technology draws. Without them the chat would quote a wire length
+            # 0.14 µm shorter than the Parasitics tool on the same page.
+            out["parasitics"] = wire_geometry(
+                path, layermap, role_overrides=(stack or {}).get("role_overrides"))
         except Exception:
             out["parasitics"] = None
         return out

@@ -48,6 +48,53 @@ JUDGEMENT = (
 )
 
 
+# Phrasings that are about the *pair* without containing a comparison word. Without
+# these, "did any pin move?" and "can this be an ECO?" would be answered from one
+# file's metadata - which is a different question with a plausible-looking answer.
+#
+# The mirror of this matters just as much: a question that carries none of these and
+# no comparison word is about one layout, and answering it with "unchanged at 56"
+# does not answer it. `is_pair_question` is what the chat routes on.
+_PAIR_ONLY = re.compile(
+    # "both" has to be about the files. "the vias overlap both M0 and M1" is a
+    # question about one layout, and reading it as a comparison answers it with a
+    # via count instead of with the overlap it asked about.
+    r"\b(both (?:files?|layouts?|revisions?|versions?|designs?|gds|of (?:them|these|the))|"
+    r"either|neither|each (?:file|layout|revision|version)|"
+    r"which (?:one|layout|file|revision|version|masks?|of (?:the )?(?:two|them))|"
+    r"mov(?:e|ed|ement)|shift(?:ed)?|still|already|"
+    r"metal[- ]?only|base[- ]?layer|respin|\beco\b|mask (?:set|change|impact)|"
+    r"identical|the same as|match(?:es)?\b|"
+    r"a (?:and|vs\.?|versus) b|\bb (?:and|vs\.?|versus) a)\b"
+)
+
+
+# Kept here rather than imported from ai.deterministic so this module has no
+# dependency on it; the two lists say the same thing and are tested against each
+# other.
+_COMPARISON = re.compile(
+    r"\b(compare|comparison|changed?|change|differ|difference|differences|delta|"
+    r"deltas|versus|\bvs\b|between the two)\b"
+)
+
+
+def is_pair_question(question: str, name_a: str | None = None,
+                     name_b: str | None = None) -> bool:
+    """Is this question about the two layouts rather than about one of them?
+
+    Naming a file is the strongest signal there is - "is B still on grid?" is a pair
+    question however it is phrased - so the two file names are checked when known.
+    """
+    q = (question or "").lower()
+    for name in (name_a, name_b):
+        if name and name.lower() in q:
+            return True
+    # "does B introduce a violation A did not have" - the bare letters, as words.
+    if re.search(r"\ba\b", q) and re.search(r"\bb\b", q):
+        return True
+    return bool(_PAIR_ONLY.search(q))
+
+
 def _fmt_um2(value: float | None) -> str:
     if value is None:
         return "unavailable"
@@ -97,16 +144,38 @@ def _labels_of(metadata: dict[str, Any]) -> dict[str, list[tuple[float, float]]]
 
 
 def _via_count(metadata: dict[str, Any]) -> int | None:
-    """Vias, from the via layers the layer map identified."""
+    """Vias, from the via layers the layer map identified - contacts excluded.
+
+    The parser counts the two separately on purpose, and folding them together
+    disagreed with every sample file's own via count. `measurements.vias` lists
+    both under one key, so reading that here is what made this answer say 14 where
+    the rest of the page says 10 and 4.
+    """
+    design = metadata.get("design") or {}
+    if design.get("via_count") is not None:
+        return int(design["via_count"])
     vias = (metadata.get("measurements") or {}).get("vias") or {}
     layers = vias.get("via_layers")
     if layers is not None:
-        return sum(int(row.get("count") or 0) for row in layers)
+        return sum(int(row.get("count") or 0) for row in layers
+                   if (row.get("role") or "via") == "via")
     rows = _layer_rows(metadata)
     if not rows:
         return None
     counted = [row.get("via_count") for row in rows if row.get("via_count") is not None]
     return sum(counted) if counted else None
+
+
+def _contact_count(metadata: dict[str, Any]) -> int | None:
+    design = metadata.get("design") or {}
+    if design.get("contact_count") is not None:
+        return int(design["contact_count"])
+    vias = (metadata.get("measurements") or {}).get("vias") or {}
+    layers = vias.get("via_layers")
+    if layers is None:
+        return None
+    return sum(int(row.get("count") or 0) for row in layers
+               if (row.get("role") or "") == "contact")
 
 
 def _cell_box(metadata: dict[str, Any]) -> dict[str, float | None]:
@@ -242,12 +311,18 @@ def _label_positions(meta_a, meta_b, name_a: str, name_b: str) -> str:
             "the pin layers.")
 
 
-def answer_pair(context: dict[str, Any], question: str) -> str | None:
+def answer_pair(context: dict[str, Any], question: str,
+                about_the_pair: bool = True) -> str | None:
     """Answer one question about the pair, or return None to let the model try.
 
     `context` carries what the page has already computed for both files: the XOR, the
     two metadata blocks and, when they were run, the rule results, netlists and
     connectivity. Nothing here reads a file.
+
+    `about_the_pair` is what the caller decided the question was asking. It is only
+    consulted where the phrasing of an answer depends on it - a refusal offers the
+    measured difference when the question was comparative, and stops at the reason
+    when it was about one layout.
     """
     q = (question or "").lower().strip()
     if not q:
@@ -271,10 +346,15 @@ def answer_pair(context: dict[str, Any], question: str) -> str | None:
             return reply
 
     # --- refusals first, so a judgement question never picks up a factual branch ---
+    # A refusal still offers what *is* measured, or it is just a wall. The exception
+    # is a question about one layout that reached here only because nothing else
+    # claimed it: "what is the timing of this cell?" gets the reason and nothing
+    # else, because the pair's XOR area is not among that cell's measurements.
     for pattern, subject, reason in JUDGEMENT:
         if re.search(pattern, q):
             head = f"I cannot tell you {subject} from these two files. {reason}"
-            if xor.get("comparable") and not (xor.get("summary") or {}).get("identical"):
+            if about_the_pair and xor.get("comparable") \
+                    and not (xor.get("summary") or {}).get("identical"):
                 s = xor["summary"]
                 head += (f" What is measured: {s['layers_changed']} of "
                          f"{s['layers_compared']} layers differ, "
@@ -315,7 +395,7 @@ def answer_pair(context: dict[str, Any], question: str) -> str | None:
         return (f"Polygons: {_delta(pa, pb)}. A polygon count is a drawing-style "
                 "measure, not a design one - the same shape split in two counts twice.")
 
-    if re.search(r"\bvias?\b", q):
+    if re.search(r"\bvias?\b|\bcontacts?\b", q):
         va, vb = _via_count(meta_a), _via_count(meta_b)
         if va is None or vb is None:
             return None
@@ -323,6 +403,11 @@ def answer_pair(context: dict[str, Any], question: str) -> str | None:
                       if (r.get("role") or "") in ("via", "contact")]
         tail = (f" The via layers that differ: {', '.join(via_layers)}."
                 if via_layers else " No via layer differs.")
+        # Contacts are a separate count everywhere else on the page, so they are a
+        # separate count here. One number covering both would not match any table.
+        ca, cb = _contact_count(meta_a), _contact_count(meta_b)
+        if ca is not None and cb is not None:
+            tail += f" Contacts, counted separately: {_delta(ca, cb)}."
         return f"Vias: {_delta(va, vb)}.{tail}"
 
     if re.search(r"\b(labels?|texts?|pin names?|net names?)\b[^.?]*"

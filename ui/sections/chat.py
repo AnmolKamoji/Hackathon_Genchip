@@ -24,7 +24,7 @@ from typing import Any
 
 import streamlit as st
 
-from ai.compare import answer_pair
+from ai.compare import answer_pair, is_pair_question
 from ai.deterministic import answer as deterministic_answer
 from ai.deterministic import answer_comparison, answer_xor, is_comparison_question
 from ai.llm import ask_llm, provider_status
@@ -107,8 +107,22 @@ def answer_for(question: str, metadata: dict[str, Any],
                pair: dict[str, Any] | None = None,
                xor: dict[str, Any] | None = None,
                comparison: dict[str, Any] | None = None) -> str:
-    """Answer one question, deterministic first and the model only as a fallback."""
-    if pair:
+    """Answer one question, deterministic first and the model only as a fallback.
+
+    The order is by *intent*, not by what happens to be available. A comparison
+    question goes to the pair; a question about one layout goes to that layout's
+    measurements even when two files are open. Getting this backwards is the failure
+    that looks most like success: "what is the gate pitch?" answered with "unchanged
+    at 45 nm" states the right number and does not answer the question, and "is this
+    layout DRC clean?" answered with both files' rule counts drops the refusal
+    entirely.
+    """
+    about_the_pair = bool(pair) and (
+        is_comparison_question(question)
+        or is_pair_question(question, (pair["a"] or {}).get("file"),
+                            (pair["b"] or {}).get("file")))
+
+    if about_the_pair:
         reply = answer_pair(pair, question)
         if reply:
             return reply
@@ -123,6 +137,13 @@ def answer_for(question: str, metadata: dict[str, Any],
     reply = deterministic_answer(metadata, question)
     if reply:
         return reply
+    # Nothing about one layout claimed it either, so let the pair try before the
+    # model does: "any IR drop concern?" names neither file and is still answerable
+    # from what was measured in both.
+    if pair and not about_the_pair:
+        reply = answer_pair(pair, question, about_the_pair=False)
+        if reply:
+            return reply
 
     if pair:
         context = {
