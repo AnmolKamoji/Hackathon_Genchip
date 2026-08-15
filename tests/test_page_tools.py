@@ -438,3 +438,32 @@ def test_the_page_is_returned_to_the_top_when_the_set_changes(run_app):
     # No second scroll script on a rerun of the same set - that would fight anyone
     # who had scrolled down to read.
     assert len(at.get("html")) < before or before == 0
+
+
+def test_the_backdrop_is_drawn_from_the_sample_layouts(run_app, monkeypatch):
+    """The artwork is the tool's own subject, not an illustration of it: every
+    polygon came out of a `.gds` in data/samples and every colour out of the `.lyp`.
+    A drawing that only looked like a layout could drift from the technology without
+    anything failing."""
+    from ui.landing import _cell_row
+
+    row, period = _cell_row.__wrapped__()
+    assert period > 0
+    for layer in ("M0", "NPOLY", "NDIFFCON", "VIA0"):
+        assert f'data-layer="{layer}"' in row, layer
+    # Outlines, not solids: filled, the backside power rails cover the whole cell.
+    assert 'fill="none"' in row and "stroke=" in row
+    # The bookkeeping layers are left out, or the cell is a smear.
+    for skipped in ("-DUPLICATE", "-PATTERN-CUT", "-EXTENDED"):
+        assert skipped not in row, skipped
+
+
+def test_the_stat_strip_is_measured_not_claimed(monkeypatch):
+    """A landing page asserting precision has to demonstrate it, so the figures under
+    the hero are read from the bundled cells by the same code the review page uses."""
+    from ui.landing import _sample_facts
+
+    html = _sample_facts.__wrapped__()
+    assert "45 nm" in html and "gate pitch (CPP)" in html   # the measured CPP
+    assert "21 nm" in html and "M0 pitch" in html
+    assert "—" not in html          # nothing unmeasurable is ever shown as a dash

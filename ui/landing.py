@@ -19,6 +19,8 @@ Three states, and the transition between them is the point:
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -42,10 +44,25 @@ html, body {{ background: {BG} !important; }}
 .gv-backdrop {{
   position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden;
   /* A vignette, so the moving geometry never competes with text in the middle. */
-  mask-image: radial-gradient(120% 90% at 50% 8%, #000 0%, #000 42%, transparent 88%);
-  -webkit-mask-image: radial-gradient(120% 90% at 50% 8%, #000 0%, #000 42%, transparent 88%);
+  /* Only the edges are softened. The copy is protected by the scrim below, not by
+     erasing the artwork - masking it away to keep text legible left a background so
+     faint there was no reason to draw it. */
+  mask-image: radial-gradient(150% 130% at 62% 55%, #000 0%, #000 62%, transparent 99%);
+  -webkit-mask-image: radial-gradient(150% 130% at 62% 55%, #000 0%, #000 62%, transparent 99%);
 }}
 .gv-backdrop svg {{ width: 100%; height: 100%; display: block; }}
+
+/* The scrim: the page colour, opaque where the words are and clear where they are
+   not. Full-bleed artwork behind a gradient is what keeps both - a legible column of
+   copy on the left, and the floorplan running out to the right at full strength. */
+.gv-scrim {{
+  position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background:
+    linear-gradient(101deg, {BG} 0%, {BG} 46%, rgba(13,17,23,.93) 60%,
+                    rgba(13,17,23,.62) 76%, rgba(13,17,23,.18) 100%),
+    linear-gradient(to bottom, {BG} 0%, rgba(13,17,23,.35) 26%,
+                    rgba(13,17,23,0) 46%);
+}}
 /* Content above the backdrop. Streamlit's own container is the stacking context. */
 .stApp > div[data-testid="stAppViewContainer"],
 section.main, section.stMain,
@@ -57,81 +74,211 @@ div[data-testid="stMainBlockContainer"] {{ position: relative; z-index: 1; }}
    and the position is reset explicitly when the uploaded set changes. */
 [data-testid="stAppScrollToBottomContainer"] {{ overflow-anchor: none; }}
 
-/* The loop. Three speeds so the eye never catches a period, and transforms only -
-   animating a transform stays on the compositor and costs no layout. */
+/* Motion is transforms and opacity only: both stay on the compositor, so a full
+   standard-cell row animates without costing a single layout pass. */
 @keyframes gv-drift-x {{ from {{ transform: translateX(0); }}
                          to   {{ transform: translateX(84px); }} }}
-@keyframes gv-drift-y {{ from {{ transform: translateY(0); }}
-                         to   {{ transform: translateY(-63px); }} }}
+@keyframes gv-row     {{ from {{ transform: translateX(0); }}
+                         to   {{ transform: translateX(calc(var(--period) * -1)); }} }}
 @keyframes gv-sweep   {{ 0%   {{ transform: translateX(-32%); opacity: 0; }}
                          12%  {{ opacity: .5; }}
                          88%  {{ opacity: .5; }}
                          100% {{ transform: translateX(132%); opacity: 0; }} }}
-@keyframes gv-pulse   {{ 0%, 100% {{ opacity: .18; }} 50% {{ opacity: .5; }} }}
-.gv-grid   {{ animation: gv-drift-x 9s linear infinite; }}
-.gv-poly   {{ animation: gv-drift-y 17s linear infinite; }}
-.gv-sweep  {{ animation: gv-sweep 11s cubic-bezier(.4,0,.6,1) infinite; }}
-.gv-vias   {{ animation: gv-pulse 4.5s ease-in-out infinite; }}
+.gv-grid  {{ animation: gv-drift-x 9s linear infinite; }}
+.gv-sweep {{ animation: gv-sweep 11s cubic-bezier(.4,0,.6,1) infinite; }}
+/* Each band slides by exactly one repeat of the cell pattern, so the loop has no
+   seam, and at its own speed, which is what gives the floorplan depth. */
+.gv-band  {{ animation: gv-row var(--dur, 26s) linear infinite; }}
+
+/* The build-up. Every mask holds a low base opacity and brightens as the wave
+   reaches it; the delay is its position in the stack, so the highlight climbs from
+   diffusion to backside metal and starts again. One keyframe, thirty-odd delays. */
+@keyframes gv-mask {{
+  0%    {{ opacity: .30; }}
+  6%    {{ opacity: .95; }}
+  18%   {{ opacity: .46; }}
+  100%  {{ opacity: .30; }}
+}}
+.gv-mask {{
+  opacity: .30;
+  animation: gv-mask 13s ease-in-out infinite;
+  animation-delay: calc(var(--step) * 0.42s);
+}}
+/* Track guides are not drawn geometry - they declare where the tracks are - so they
+   stay a constant hairline instead of joining the wave. */
+.gv-guide {{ animation: none; opacity: .13; }}
+
 /* Anyone who has asked for less motion gets a still drawing, not a moving one. */
 @media (prefers-reduced-motion: reduce) {{
-  .gv-grid, .gv-poly, .gv-sweep, .gv-vias {{ animation: none !important; }}
+  .gv-grid, .gv-sweep, .gv-band, .gv-mask {{ animation: none !important; }}
+  .gv-mask {{ opacity: .30; }}
 }}
 /* Leaving the landing page: the grid fades once and does not come back. The node is
    rebuilt on every rerun, so a transition would have nothing to move from - a
    one-shot keyframe is what actually animates here. */
 @keyframes gv-retire {{ from {{ opacity: 1; }} to {{ opacity: 0; visibility: hidden; }} }}
-.gv-backdrop.is-retiring {{ animation: gv-retire 900ms ease-in-out forwards; }}
+.gv-backdrop.is-retiring, .gv-scrim.is-retiring {{
+  animation: gv-retire 900ms ease-in-out forwards;
+}}
 </style>
 """
 
 
-def _svg() -> str:
-    """The drawing: a routing grid, tracks on pitch, poly across, vias at crossings.
+# The cells drawn in the background. Real files, read with the real layer map, so
+# the drawing is the tool's own subject rather than an illustration of it.
+_ROW = ("AN2D1_2_RT_4.gds", "NR2D1_1_RT_4.gds", "DCAP0_1_RT_4.gds", "NR2D1_2_RT_4.gds")
+# Drawn layers only. The duplicates, extensions, pattern cuts and label layers are
+# bookkeeping - drawing them turns a legible cell into a smear.
+_SKIP = ("-DUPLICATE", "-EXTENDED", "-PATTERN-CUT", "-LABEL", "DUMMY-")
+_SAMPLES = Path(__file__).resolve().parent.parent / "data" / "samples"
 
-    Coordinates are a 1600x900 viewBox scaled to the viewport, so the same drawing
-    holds together on a laptop and on a wall display.
+# A cell row is 118 units tall in a 1600x900 viewBox, and the drawing stacks seven of
+# them. At that size a cell is not a colour block - it is legible geometry, poly and
+# diffcon and metal, the way a floorplan looks a few steps back from the screen. One
+# enormous row read as four smudges; this reads as a chip.
+_ROW_HEIGHT = 118.0
+_BANDS = 7
+
+
+def _outlines(name: str):
+    from analyzer.layermap import default_layermap, load_lyp
+    from analyzer.measurements import shape_outlines
+    return shape_outlines(_SAMPLES / name, load_lyp(default_layermap()))
+
+
+@st.cache_resource(show_spinner=False)
+def _cell_row() -> tuple[str, float]:
+    """A standard-cell row, drawn from the sample layouts' own geometry.
+
+    Cells abut the way they do in a real row and alternate ones are flipped, which is
+    how a placer lays them down - the power rails have to meet. Every polygon here was
+    read out of a `.gds` in `data/samples/` and every colour came from the `.lyp`, so
+    nothing about this drawing was invented for decoration.
+
+    Returns the drawing and the width of one repeat of the pattern, which is what the
+    slide has to travel for the loop to have no seam.
+
+    Cached as a resource: it is the same string on every rerun and costs one read.
     """
+    try:
+        cells = [(name, _outlines(name)) for name in _ROW
+                 if (_SAMPLES / name).exists()]
+    except Exception:
+        return "", 0.0                  # a background is never worth an error page
+    cells = [(n, o) for n, o in cells if o.get("layers")]
+    if not cells:
+        return "", 0.0
+
+    height_um = max(o["cell_height_um"] or 0.2 for _, o in cells) or 0.2
+    scale = _ROW_HEIGHT / height_um
+
+    # Group by layer so a whole mask lights up at once, and keep process order: the
+    # numbers in this technology already run bottom-up, diffusion through backside.
+    # One repeat of the pattern is every cell laid down once. The row is drawn a full
+    # repeat wider than the viewBox so the slide can wrap without a visible seam.
+    period = sum(o["cell_width_um"] or 0.2 for _, o in cells) * scale
+
+    by_layer: dict[tuple, dict] = {}
+    x_um = 0.0
+    index = 0
+    while x_um * scale < 1600 + period + 40:
+        name, outlines = cells[index % len(cells)]
+        flip = (index % 2) == 1
+        box = outlines["cell_bbox_um"] or [0, 0, 0, 0]
+        width_um = outlines["cell_width_um"] or 0.2
+        for row in outlines["layers"]:
+            if any(mark in row["name"] for mark in _SKIP) or not row["shapes"]:
+                continue
+            key = (row["layer"], row["datatype"])
+            entry = by_layer.setdefault(key, {"name": row["name"],
+                                              "colour": row["colour"],
+                                              "role": row["role"], "d": []})
+            for shape in row["shapes"]:
+                pts = []
+                for px, py in shape["outline_um"]:
+                    sx = (x_um + (px - box[0])) * scale
+                    # y grows downward in SVG, and a flipped cell mirrors about the
+                    # row's own centre line - which is what makes the power rails of
+                    # neighbouring cells meet, as they must in a real row.
+                    local = (py - box[1])
+                    if flip:
+                        local = height_um - local
+                    sy = (height_um - local) * scale
+                    pts.append(f"{sx:.1f},{sy:.1f}")
+                if pts:
+                    entry["d"].append("M" + "L".join(pts) + "Z")
+        x_um += width_um
+        index += 1
+
+    # Outlines, not solids. Filled, the two backside power rails cover the whole cell
+    # and the drawing is a magenta wash with a few blocks in it; stroked, the same
+    # geometry reads the way a layout viewer draws it at low zoom - fine, technical
+    # and legible - and no layer can drown the rest by being large.
+    #
+    # Bottom-up, so the highlight wave climbs the stack the way the process builds it.
+    groups = []
+    for step, key in enumerate(sorted(by_layer)):
+        row = by_layer[key]
+        if not row["d"]:
+            continue
+        guide = "TRACK-GUIDE" in row["name"]
+        # Vias and contacts are small enough to fill: they are the punctuation of a
+        # layout and read as dots rather than as boxes.
+        solid = row["role"] in ("via", "contact")
+        paint = (f'fill="{row["colour"]}" fill-opacity="0.5" '
+                 f'stroke="{row["colour"]}" stroke-width="1"' if solid
+                 else f'fill="none" stroke="{row["colour"]}" '
+                      f'stroke-width="{0.8 if guide else 1.4}"')
+        groups.append(
+            f'<g class="gv-mask{" gv-guide" if guide else ""}" '
+            f'style="--step:{step}" {paint} stroke-linejoin="round" '
+            f'data-layer="{row["name"]}"><path d="{"".join(row["d"])}"/></g>')
+    return "".join(groups), period
+
+
+def _svg() -> str:
+    """The backdrop: a substrate grid, and a real cell row building up over it."""
     grid = "".join(
         f'<line x1="{x}" y1="0" x2="{x}" y2="900" />' for x in range(0, 1700, 42)
     ) + "".join(
         f'<line x1="0" y1="{y}" x2="1600" y2="{y}" />' for y in range(0, 964, 63)
     )
-    # Metal tracks: on a regular pitch, varying lengths, the way a cell is wired.
-    tracks = "".join(
-        f'<rect x="{x}" y="{y}" width="{w}" height="7" rx="1.5" />'
-        for x, y, w in ((120, 126, 360), (560, 126, 190), (300, 252, 470),
-                        (880, 252, 300), (180, 378, 250), (520, 378, 540),
-                        (240, 504, 420), (760, 504, 260), (140, 630, 300),
-                        (520, 630, 480), (1120, 378, 260), (1040, 630, 220))
-    )
-    poly = "".join(
-        f'<rect x="{x}" y="60" width="6" height="780" rx="1.5" />'
-        for x in (210, 336, 462, 588, 714, 840, 966, 1092, 1218, 1344)
-    )
-    vias = "".join(
-        f'<rect x="{x - 6}" y="{y - 6}" width="12" height="12" rx="2" />'
-        for x, y in ((336, 126), (588, 252), (462, 378), (840, 252), (714, 504),
-                     (966, 378), (588, 630), (1218, 378), (210, 504), (1092, 630))
-    )
+    row, period = _cell_row()
+    # The row is drawn once and instanced. Alternate bands are mirrored, which is how
+    # rows abut in a real block, and each drifts at its own speed so the floorplan has
+    # depth rather than sliding as one flat sheet.
+    # Two groups per band, and the split is load-bearing: a CSS `transform` animation
+    # replaces the element's `transform` attribute outright rather than composing with
+    # it. With placement and motion on the same group, every band animated back to
+    # y=0 and the seven rows drew on top of each other.
+    bands = []
+    for i in range(_BANDS):
+        y = i * _ROW_HEIGHT
+        place = (f"translate({-(i % 3) * 130:.0f},{y + _ROW_HEIGHT:.1f}) scale(1,-1)"
+                 if i % 2 else f"translate({-(i % 3) * 130:.0f},{y:.1f})")
+        bands.append(
+            f'<g transform="{place}">'
+            f'<g class="gv-band" style="--period:{period:.1f}px;'
+            f'--dur:{26 + (i % 3) * 9}s"><use href="#gv-cellrow"/></g></g>')
     return f"""
 <div class="gv-backdrop" id="gv-backdrop">
   <svg viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid slice"
        xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
     <defs>
+      <g id="gv-cellrow">{row}</g>
       <linearGradient id="gv-sweep-grad" x1="0" y1="0" x2="1" y2="0">
         <stop offset="0%"   stop-color="{TRACK}" stop-opacity="0"/>
-        <stop offset="50%"  stop-color="{TRACK}" stop-opacity="0.30"/>
+        <stop offset="50%"  stop-color="{TRACK}" stop-opacity="0.22"/>
         <stop offset="100%" stop-color="{TRACK}" stop-opacity="0"/>
       </linearGradient>
     </defs>
-    <g class="gv-grid" stroke="{BORDER}" stroke-width="1" opacity="0.34">{grid}</g>
-    <g class="gv-poly" fill="{POLY}" opacity="0.10">{poly}</g>
-    <g fill="{TRACK}" opacity="0.14">{tracks}</g>
-    <g class="gv-vias" fill="{VIA}">{vias}</g>
-    <rect class="gv-sweep" x="0" y="0" width="300" height="900"
+    <g class="gv-grid" stroke="{BORDER}" stroke-width="1" opacity="0.42">{grid}</g>
+    {"".join(bands)}
+    <rect class="gv-sweep" x="0" y="0" width="360" height="900"
           fill="url(#gv-sweep-grad)"/>
   </svg>
 </div>
+<div class="gv-scrim" id="gv-scrim"></div>
 """
 
 
@@ -143,6 +290,7 @@ def backdrop(retiring: bool = False) -> None:
     svg = _svg()
     if retiring:
         svg = svg.replace('class="gv-backdrop"', 'class="gv-backdrop is-retiring"')
+        svg = svg.replace('class="gv-scrim"', 'class="gv-scrim is-retiring"')
     st.markdown(svg, unsafe_allow_html=True)
 
 
@@ -190,16 +338,56 @@ HERO_CSS = f"""
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
 }}
 .gv-card {{
-  border: 1px solid {BORDER}; border-radius: 10px; padding: 13px 14px;
-  background: linear-gradient(180deg, rgba(28,33,40,.82), rgba(22,27,34,.72));
-  backdrop-filter: blur(3px);
+  position: relative; overflow: hidden;
+  border: 1px solid {BORDER}; border-radius: 10px; padding: 14px 15px;
+  background: linear-gradient(180deg, rgba(28,33,40,.94), rgba(22,27,34,.88));
+  backdrop-filter: blur(6px);
+  transition: transform .22s cubic-bezier(.22,1,.36,1), border-color .22s ease,
+              box-shadow .22s ease;
 }}
+/* A hairline along the top edge, in the three decorative hues. It is the only
+   ornament on the card, and it is what makes the four read as one set. */
+.gv-card::before {{
+  content: ""; position: absolute; inset: 0 0 auto 0; height: 1px;
+  background: linear-gradient(90deg, {TRACK}, {VIA} 52%, {POLY});
+  opacity: .5; transition: opacity .22s ease;
+}}
+.gv-card:hover {{
+  transform: translateY(-2px); border-color: #3d4854;
+  box-shadow: 0 10px 26px -14px rgba(0,0,0,.9);
+}}
+.gv-card:hover::before {{ opacity: 1; }}
 .gv-card .k {{
   font-size: 0.68rem; letter-spacing: .12em; text-transform: uppercase;
   color: {TRACK}; margin-bottom: 7px; font-weight: 600;
 }}
 .gv-card .t {{ font-size: 0.88rem; color: {TEXT}; margin-bottom: 4px; font-weight: 560; }}
 .gv-card .d {{ font-size: 0.79rem; color: {MUTED}; line-height: 1.45; }}
+
+/* The measured strip. Figures in the tabular face the whole app uses for numbers,
+   so a column of them lines up and reads as data rather than as marketing. */
+.gv-stats {{
+  display: grid; gap: 1px; margin: 0 0 8px 0;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  background: {BORDER}; border: 1px solid {BORDER}; border-radius: 10px;
+  overflow: hidden;
+}}
+.gv-stat {{
+  background: linear-gradient(180deg, rgba(22,27,34,.96), rgba(13,17,23,.93));
+  padding: 11px 14px;
+}}
+.gv-stat b {{
+  display: block; font-family: "SF Mono", Menlo, monospace;
+  font-size: 1.06rem; color: {TEXT}; font-weight: 600; letter-spacing: -0.01em;
+}}
+.gv-stat span {{
+  display: block; margin-top: 2px; font-size: 0.7rem; color: {MUTED};
+  letter-spacing: .04em;
+}}
+.gv-statnote {{ font-size: 0.72rem; color: {MUTED}; opacity: .8; margin-bottom: 20px; }}
+.gv-statnote code {{
+  background: {SURFACE_2}; border-radius: 4px; padding: 0 4px; color: {MUTED};
+}}
 
 .gv-need {{
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
@@ -225,11 +413,16 @@ HERO_CSS = f"""
 /* Entrances. Short, once, and staggered so the eye lands on the headline first. */
 @keyframes gv-rise {{ from {{ opacity: 0; transform: translateY(9px); }}
                       to   {{ opacity: 1; transform: none; }} }}
-.gv-hero, .gv-cards, .gv-need {{ animation: gv-rise .5s cubic-bezier(.22,1,.36,1) both; }}
-.gv-cards {{ animation-delay: .07s; }}
-.gv-need  {{ animation-delay: .13s; }}
+.gv-hero, .gv-cards, .gv-stats, .gv-statnote, .gv-need {{
+  animation: gv-rise .5s cubic-bezier(.22,1,.36,1) both;
+}}
+.gv-cards    {{ animation-delay: .06s; }}
+.gv-stats    {{ animation-delay: .12s; }}
+.gv-statnote {{ animation-delay: .14s; }}
+.gv-need     {{ animation-delay: .18s; }}
 @media (prefers-reduced-motion: reduce) {{
-  .gv-hero, .gv-cards, .gv-need {{ animation: none; }}
+  .gv-hero, .gv-cards, .gv-stats, .gv-statnote, .gv-need {{ animation: none; }}
+  .gv-card {{ transition: none; }}
 }}
 </style>
 """
@@ -278,8 +471,52 @@ HERO = f"""
 """
 
 
+@st.cache_resource(show_spinner=False)
+def _sample_facts() -> str:
+    """The strip under the hero, measured from the bundled cells at start-up.
+
+    A landing page that claims precision should demonstrate it. Every figure here was
+    read out of `data/samples/` by the same code the review page uses, so the numbers
+    a visitor sees before uploading anything are already real ones.
+    """
+    from analyzer.layermap import default_layermap, load_lyp
+    from analyzer.measurements import shape_outlines
+    from analyzer.pitch import analyze_pitch
+    try:
+        layermap = load_lyp(default_layermap())
+        files = sorted(_SAMPLES.glob("*.gds"))
+        if not files:
+            return ""
+        outlines = [shape_outlines(f, layermap) for f in files]
+        pitch = analyze_pitch(outlines[0], files[0].name)
+        shapes = sum(o["shape_total"] for o in outlines)
+        layers = len({(r["layer"], r["datatype"])
+                      for o in outlines for r in o["layers"]})
+    except Exception:
+        return ""
+
+    def nm(value) -> str:
+        return f"{value:g} nm" if value else "—"
+
+    metals = pitch.get("metal_pitches") or {}
+    stats = [(str(len(files)), "sample cells"),
+             (f"{shapes:,}", "polygons read"),
+             (str(layers), "technology layers"),
+             (nm((pitch.get("gate_pitch") or {}).get("cpp_nm")), "gate pitch (CPP)"),
+             (nm((metals.get("M0") or {}).get("pitch_nm")), "M0 pitch"),
+             (nm((metals.get("M1") or {}).get("pitch_nm")), "M1 pitch")]
+    # A figure that could not be measured is not shown at all - a landing page
+    # demonstrating precision must not lead with an em dash.
+    stats = [(v, k) for v, k in stats if v != "—"]
+    cells = "".join(f'<div class="gv-stat"><b>{v}</b><span>{k}</span></div>'
+                    for v, k in stats)
+    return (f'<div class="gv-stats">{cells}</div>'
+            f'<div class="gv-statnote">measured from <code>data/samples/</code> at '
+            f'start-up by the same code the review page uses</div>')
+
+
 def hero() -> None:
-    st.markdown(HERO, unsafe_allow_html=True)
+    st.markdown(HERO + _sample_facts(), unsafe_allow_html=True)
 
 
 def masthead(backdrop_slot, masthead_slot, status_slot, layermap: dict,
