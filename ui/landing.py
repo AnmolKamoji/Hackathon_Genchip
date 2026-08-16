@@ -88,7 +88,10 @@ div[data-testid="stMainBlockContainer"] {{ position: relative; z-index: 1; }}
 .gv-sweep {{ animation: gv-sweep 11s cubic-bezier(.4,0,.6,1) infinite; }}
 /* Each band slides by exactly one repeat of the cell pattern, so the loop has no
    seam, and at its own speed, which is what gives the floorplan depth. */
-.gv-band  {{ animation: gv-row var(--dur, 26s) linear infinite; }}
+.gv-band  {{
+  animation: gv-row var(--dur, 26s) linear infinite;
+  animation-delay: var(--phase, 0s);
+}}
 
 /* The build-up. Every mask holds a low base opacity and brightens as the wave
    reaches it; the delay is its position in the stack, so the highlight climbs from
@@ -175,13 +178,15 @@ def _cell_row() -> tuple[str, float]:
     # Group by layer so a whole mask lights up at once, and keep process order: the
     # numbers in this technology already run bottom-up, diffusion through backside.
     # One repeat of the pattern is every cell laid down once. The row is drawn a full
-    # repeat wider than the viewBox so the slide can wrap without a visible seam.
+    # repeat wider than the viewBox - plus a whole spare repeat - so that wherever the
+    # slide is in its cycle there is geometry under the viewport, with no edge to
+    # arrive at. Running out is what made the right-hand side blink.
     period = sum(o["cell_width_um"] or 0.2 for _, o in cells) * scale
 
     by_layer: dict[tuple, dict] = {}
     x_um = 0.0
     index = 0
-    while x_um * scale < 1600 + period + 40:
+    while x_um * scale < 1600 + period * 2:
         name, outlines = cells[index % len(cells)]
         flip = (index % 2) == 1
         box = outlines["cell_bbox_um"] or [0, 0, 0, 0]
@@ -238,10 +243,12 @@ def _cell_row() -> tuple[str, float]:
 
 def _svg() -> str:
     """The backdrop: a substrate grid, and a real cell row building up over it."""
+    # Drawn past both edges: the grid drifts 84 units to the right, and starting it
+    # at x=0 left an unruled strip on the left for the whole cycle.
     grid = "".join(
-        f'<line x1="{x}" y1="0" x2="{x}" y2="900" />' for x in range(0, 1700, 42)
+        f'<line x1="{x}" y1="-64" x2="{x}" y2="964" />' for x in range(-126, 1764, 42)
     ) + "".join(
-        f'<line x1="0" y1="{y}" x2="1600" y2="{y}" />' for y in range(0, 964, 63)
+        f'<line x1="-126" y1="{y}" x2="1764" y2="{y}" />' for y in range(-63, 1027, 63)
     )
     row, period = _cell_row()
     # The row is drawn once and instanced. Alternate bands are mirrored, which is how
@@ -251,15 +258,23 @@ def _svg() -> str:
     # replaces the element's `transform` attribute outright rather than composing with
     # it. With placement and motion on the same group, every band animated back to
     # y=0 and the seven rows drew on top of each other.
+    #
+    # Bands are staggered by starting their animation part-way through - a negative
+    # delay - and never by shifting them sideways. A sideways offset moves the window
+    # each band reads from, so the ones pushed left ran off the end of the drawing
+    # near the end of their slide: a black gap that filled abruptly when the loop
+    # restarted. Phase costs nothing and cannot outrun the geometry.
     bands = []
     for i in range(_BANDS):
         y = i * _ROW_HEIGHT
-        place = (f"translate({-(i % 3) * 130:.0f},{y + _ROW_HEIGHT:.1f}) scale(1,-1)"
-                 if i % 2 else f"translate({-(i % 3) * 130:.0f},{y:.1f})")
+        place = (f"translate(0,{y + _ROW_HEIGHT:.1f}) scale(1,-1)"
+                 if i % 2 else f"translate(0,{y:.1f})")
+        duration = 26 + (i % 3) * 9
         bands.append(
             f'<g transform="{place}">'
             f'<g class="gv-band" style="--period:{period:.1f}px;'
-            f'--dur:{26 + (i % 3) * 9}s"><use href="#gv-cellrow"/></g></g>')
+            f'--dur:{duration}s;--phase:-{i * duration / _BANDS:.2f}s">'
+            f'<use href="#gv-cellrow"/></g></g>')
     return f"""
 <div class="gv-backdrop" id="gv-backdrop">
   <svg viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid slice"

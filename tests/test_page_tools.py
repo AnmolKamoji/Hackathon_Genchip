@@ -467,3 +467,37 @@ def test_the_stat_strip_is_measured_not_claimed(monkeypatch):
     assert "45 nm" in html and "gate pitch (CPP)" in html   # the measured CPP
     assert "21 nm" in html and "M0 pitch" in html
     assert "—" not in html          # nothing unmeasurable is ever shown as a dash
+
+
+def test_every_band_has_geometry_under_it_for_the_whole_slide():
+    """The glitch this pins: bands popping in on the right instead of gliding.
+
+    Each band slides left by one repeat of the cell pattern. The window it reads from
+    therefore reaches `viewBox + period`, and the drawing has to extend at least that
+    far or the band runs off the end - the right-hand strip empties and then fills in
+    a single frame when the loop restarts.
+
+    Staggering bands sideways is what broke it: an offset moves that window without
+    moving the drawing. Bands are staggered by animation phase instead, so this also
+    checks no horizontal offset has crept back in.
+    """
+    import re
+
+    from ui.landing import _BANDS, _cell_row, _svg
+
+    row, period = _cell_row.__wrapped__()
+    assert period > 0
+    xs = [float(v) for v in re.findall(r"[ML](-?\d+\.?\d*),", row)]
+    assert min(xs) <= 8, "the drawing must start at the left edge"
+    assert max(xs) >= 1600 + period, (
+        f"the drawing reaches {max(xs):.0f} but a band reads out to "
+        f"{1600 + period:.0f} at the end of its slide")
+
+    svg = _svg()
+    # Placement translates carry the vertical stack only. A non-zero x here is the bug.
+    offsets = {m for m in re.findall(r"translate\((-?[\d.]+),", svg)}
+    assert offsets == {"0"}, f"bands must not be offset sideways, found {offsets}"
+    # ...and the stagger is there, as phase.
+    phases = re.findall(r"--phase:(-?[\d.]+)s", svg)
+    assert len(phases) == _BANDS
+    assert len({float(p) for p in phases}) > 1, "the bands must not move in lockstep"
