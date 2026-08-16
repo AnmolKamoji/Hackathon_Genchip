@@ -21,7 +21,9 @@ html, body {
   padding: 0;
   background: var(--gv-bg);
   color: var(--gv-text);
-  font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font: 13px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "SF Pro", "Helvetica Neue", "Segoe UI Variable Text", "Segoe UI", Inter, Roboto, Ubuntu, "Noto Sans", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   overflow: hidden;
 }
 
@@ -100,7 +102,7 @@ html, body {
   width: 112px;
   height: 27px;
   padding: 0 8px;
-  font: 11px ui-monospace, monospace;
+  font: 11px ui-monospace, "SF Mono", SFMono-Regular, Menlo, "JetBrains Mono", "Cascadia Mono", Consolas, "Liberation Mono", monospace;
   color: var(--gv-text);
   background: #131c25;
   border: 1px solid #26333f;
@@ -110,7 +112,7 @@ html, body {
 .gv-find:focus { border-color: var(--gv-accent); }
 .gv-fcount {
   min-width: 42px;
-  font: 10px ui-monospace, monospace;
+  font: 10px ui-monospace, "SF Mono", SFMono-Regular, Menlo, "JetBrains Mono", "Cascadia Mono", Consolas, "Liberation Mono", monospace;
   color: var(--gv-dim);
 }
 
@@ -135,7 +137,7 @@ html, body {
   display: flex;
   gap: 12px;
   padding: 4px 9px;
-  font: 11px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: 11px/1.3 ui-monospace, "SF Mono", SFMono-Regular, Menlo, "JetBrains Mono", "Cascadia Mono", Consolas, "Liberation Mono", monospace;
   color: var(--gv-text);
   background: rgba(11,15,20,.82);
   border: 1px solid var(--gv-line);
@@ -150,7 +152,7 @@ html, body {
   display: flex;
   align-items: center;
   gap: 7px;
-  font: 11px ui-monospace, monospace;
+  font: 11px ui-monospace, "SF Mono", SFMono-Regular, Menlo, "JetBrains Mono", "Cascadia Mono", Consolas, "Liberation Mono", monospace;
   color: var(--gv-text);
   background: rgba(11,15,20,.82);
   padding: 4px 8px;
@@ -167,7 +169,7 @@ html, body {
 .gv-tip {
   position: absolute;
   padding: 6px 9px;
-  font: 11px/1.5 ui-monospace, monospace;
+  font: 11px/1.5 ui-monospace, "SF Mono", SFMono-Regular, Menlo, "JetBrains Mono", "Cascadia Mono", Consolas, "Liberation Mono", monospace;
   background: rgba(9,13,18,.96);
   border: 1px solid #2b3a4a;
   border-radius: 6px;
@@ -220,7 +222,7 @@ kbd {
   display: inline-block;
   min-width: 15px;
   padding: 0 4px;
-  font: 10px ui-monospace, monospace;
+  font: 10px ui-monospace, "SF Mono", SFMono-Regular, Menlo, "JetBrains Mono", "Cascadia Mono", Consolas, "Liberation Mono", monospace;
   text-align: center;
   background: #1b2530;
   border: 1px solid #33445a;
@@ -298,8 +300,8 @@ kbd {
 .gv-sw::-webkit-color-swatch-wrapper { padding: 0; }
 .gv-sw::-webkit-color-swatch { border: 0; border-radius: 1px; }
 .gv-lname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.gv-ld { font: 10px ui-monospace, monospace; color: var(--gv-dim); }
-.gv-n { font: 10px ui-monospace, monospace; color: var(--gv-dim); min-width: 14px; text-align: right; }
+.gv-ld { font: 10px ui-monospace, "SF Mono", SFMono-Regular, Menlo, "JetBrains Mono", "Cascadia Mono", Consolas, "Liberation Mono", monospace; color: var(--gv-dim); }
+.gv-n { font: 10px ui-monospace, "SF Mono", SFMono-Regular, Menlo, "JetBrains Mono", "Cascadia Mono", Consolas, "Liberation Mono", monospace; color: var(--gv-dim); min-width: 14px; text-align: right; }
 
 .gv-solo {
   width: 18px;
@@ -331,7 +333,7 @@ kbd {
 }
 .gv-irow { display: flex; justify-content: space-between; gap: 10px; padding: 1.5px 0; }
 .gv-irow span { color: var(--gv-dim); }
-.gv-irow b { font: 11px ui-monospace, monospace; }
+.gv-irow b { font: 11px ui-monospace, "SF Mono", SFMono-Regular, Menlo, "JetBrains Mono", "Cascadia Mono", Consolas, "Liberation Mono", monospace; }
 .gv-mrow b { color: #f0b429; }
 .gv-dim { color: var(--gv-dim); }
 .gv-hint { color: var(--gv-dim); line-height: 1.6; }
@@ -414,7 +416,7 @@ kbd {
   font-size: 11px;
 }
 .gv-depth .gv-slider { flex: 1; width: auto; }
-.gv-depth b { font: 10px ui-monospace, monospace; }
+.gv-depth b { font: 10px ui-monospace, "SF Mono", SFMono-Regular, Menlo, "JetBrains Mono", "Cascadia Mono", Consolas, "Liberation Mono", monospace; }
 .gv-mkr.gv-unvisited { color: var(--gv-text); font-weight: 600; }
 .gv-mkr.gv-waived { opacity: .45; text-decoration: line-through; }
 .gv-dot { width: 8px; height: 8px; border-radius: 50%; background: #3d4a58; }
@@ -422,13 +424,13 @@ kbd {
 .gv-st-pass .gv-dot { background: #3fb950; }
 .gv-st-not-checked .gv-dot { background: #d29922; }
 .gv-st-not-applicable .gv-dot { background: #4d5b6b; }
-.gv-mid { font: 10px ui-monospace, monospace; color: var(--gv-text); }
+.gv-mid { font: 10px ui-monospace, "SF Mono", SFMono-Regular, Menlo, "JetBrains Mono", "Cascadia Mono", Consolas, "Liberation Mono", monospace; color: var(--gv-text); }
 .gv-mrule { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gv-mst { font-size: 9.5px; text-transform: uppercase; letter-spacing: .04em; }
 /* Uppercasing a unit is wrong: "µm²" becomes "MM²", which is a different unit. */
 .gv-diff .gv-mst, .gv-net .gv-mst, .gv-cell .gv-mst {
   text-transform: none;
-  font: 10px ui-monospace, monospace;
+  font: 10px ui-monospace, "SF Mono", SFMono-Regular, Menlo, "JetBrains Mono", "Cascadia Mono", Consolas, "Liberation Mono", monospace;
 }
 .gv-mtext { font-size: 11px; line-height: 1.5; margin: 2px 0 5px; }
 
@@ -477,7 +479,7 @@ kbd {
   flex: 1;
   height: 25px;
   padding: 0 6px;
-  font: 11px ui-monospace, monospace;
+  font: 11px ui-monospace, "SF Mono", SFMono-Regular, Menlo, "JetBrains Mono", "Cascadia Mono", Consolas, "Liberation Mono", monospace;
   color: var(--gv-text);
   background: #131c25;
   border: 1px solid #26333f;
@@ -560,7 +562,7 @@ kbd {
   font-size: 12px;
   border-bottom: 1px solid var(--gv-line);
 }
-.gv-htitle .gv-dim { font: 10.5px ui-monospace, monospace; }
+.gv-htitle .gv-dim { font: 10.5px ui-monospace, "SF Mono", SFMono-Regular, Menlo, "JetBrains Mono", "Cascadia Mono", Consolas, "Liberation Mono", monospace; }
 
 .gv-hstage { flex: 1 1 auto; min-height: 0; }
 .gv-hstage.gv-root { height: 100%; border: 0; border-radius: 0; }

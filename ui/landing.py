@@ -24,7 +24,8 @@ from pathlib import Path
 import streamlit as st
 import streamlit.components.v1 as components
 
-from ui.theme import ACCENT, BG, BORDER, MUTED, SURFACE, SURFACE_2, TEXT
+from ui.theme import (ACCENT, BG, BORDER, FONT_MONO, MUTED, SURFACE,
+                      SURFACE_2, TEXT)
 
 # Decorative hues only, and deliberately not OK / WARN / DANGER: those three carry
 # meaning everywhere else in the app, and a drifting background in the same green
@@ -392,7 +393,7 @@ HERO_CSS = f"""
   padding: 11px 14px;
 }}
 .gv-stat b {{
-  display: block; font-family: "SF Mono", Menlo, monospace;
+  display: block; font-family: {FONT_MONO};
   font-size: 1.06rem; color: {TEXT}; font-weight: 600; letter-spacing: -0.01em;
 }}
 .gv-stat span {{

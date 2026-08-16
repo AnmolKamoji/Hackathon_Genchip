@@ -989,7 +989,7 @@
     // The size, while it is being drawn: the alternative is drawing it, measuring
     // it, undoing it and drawing it again.
     ctx.fillStyle = "#dce9ff";
-    ctx.font = "600 11px ui-monospace, monospace";
+    ctx.font = "600 11px ui-monospace, \"SF Mono\", SFMono-Regular, Menlo, \"Cascadia Mono\", Consolas, monospace";
     ctx.fillText(`${fmtLen(Math.abs(drag.x1 - drag.x0))} × ${fmtLen(Math.abs(drag.y1 - drag.y0))}`,
                  x + 4, y - 6);
     ctx.restore();
@@ -1018,7 +1018,7 @@
     if (pending.kind === "wire" && points.length > 1) {
       const last = points[points.length - 1], prev = points[points.length - 2];
       ctx.fillStyle = "#dce9ff";
-      ctx.font = "600 11px ui-monospace, monospace";
+      ctx.font = "600 11px ui-monospace, \"SF Mono\", SFMono-Regular, Menlo, \"Cascadia Mono\", Consolas, monospace";
       ctx.fillText(`${fmtLen(Math.hypot(last[0] - prev[0], last[1] - prev[1]))} · ` +
                    `width ${fmtLen(this.wireWidthNm() / 1000)}`,
                    this.sx(last[0]) + 8, this.sy(last[1]) - 8);

@@ -2316,7 +2316,7 @@
       const x0 = Math.floor(this.wx(0) / step) * step;
       const y0 = Math.floor(this.wy(this.vh) / step) * step;
       ctx.lineWidth = 1;
-      ctx.font = "10px ui-monospace, monospace";
+      ctx.font = "10px ui-monospace, \"SF Mono\", SFMono-Regular, Menlo, \"Cascadia Mono\", Consolas, monospace";
       for (let x = x0; x <= this.wx(this.vw); x += step) {
         const px = Math.round(this.sx(x)) + 0.5;
         const major = Math.abs(x) < step / 2;
@@ -2399,7 +2399,7 @@
       if (Math.abs(x1 - x0) < 26 && Math.abs(y0 - y1) < 14) return;
       ctx.save();
       ctx.fillStyle = "#58a6ff";
-      ctx.font = "600 11px ui-monospace, monospace";
+      ctx.font = "600 11px ui-monospace, \"SF Mono\", SFMono-Regular, Menlo, \"Cascadia Mono\", Consolas, monospace";
       ctx.textAlign = "center";
       ctx.fillText(fmtLen(s.w), (x0 + x1) / 2, y1 - 6);
       ctx.textAlign = "left";
@@ -2538,7 +2538,7 @@
       const placements = (this.tree && this.tree.placements) || [];
       const limit = this.depthLimit || (this.tree && this.tree.maxDepth) || 0;
       ctx.save();
-      ctx.font = "10px ui-monospace, monospace";
+      ctx.font = "10px ui-monospace, \"SF Mono\", SFMono-Regular, Menlo, \"Cascadia Mono\", Consolas, monospace";
       ctx.textBaseline = "top";
       for (const p of placements) {
         if (!p.bbox) continue;
@@ -2575,7 +2575,7 @@
 
     drawLabels(ctx) {
       ctx.save();
-      ctx.font = "10px ui-monospace, monospace";
+      ctx.font = "10px ui-monospace, \"SF Mono\", SFMono-Regular, Menlo, \"Cascadia Mono\", Consolas, monospace";
       for (const layer of this.activeLayers("a")) {
         ctx.fillStyle = layer.colour;
         for (const lab of layer.labels) {
@@ -2607,7 +2607,7 @@
           ctx.fill(); ctx.stroke();
           ctx.setLineDash([]);
           ctx.fillStyle = "#f0b429";
-          ctx.font = "600 11px ui-monospace, monospace";
+          ctx.font = "600 11px ui-monospace, \"SF Mono\", SFMono-Regular, Menlo, \"Cascadia Mono\", Consolas, monospace";
           ctx.fillText(`${fmtLen(Math.abs(r.x1 - r.x0))} × ${fmtLen(Math.abs(r.y1 - r.y0))}`,
                        Math.min(x0, x1) + 6, Math.min(y0, y1) + 15);
           ctx.fillText(fmtArea(Math.abs((r.x1 - r.x0) * (r.y1 - r.y0))),
@@ -2625,7 +2625,7 @@
           const len = Math.hypot(dx, dy);
           const angle = Math.atan2(dy, dx) * 180 / Math.PI;
           ctx.fillStyle = "#f0b429";
-          ctx.font = "600 12px ui-monospace, monospace";
+          ctx.font = "600 12px ui-monospace, \"SF Mono\", SFMono-Regular, Menlo, \"Cascadia Mono\", Consolas, monospace";
           const label = `${fmtLen(len)}  Δ${fmtLen(dx)}, ${fmtLen(dy)}  ${angle.toFixed(1)}°`;
           ctx.fillText(label, (x0 + x1) / 2 + 8, (y0 + y1) / 2 - 8);
         }

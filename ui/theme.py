@@ -57,13 +57,61 @@ STATE_ICON = {
     "none": "·",
 }
 
+# Type. Apple's system faces first, so on macOS and iOS this is genuinely SF Pro and
+# SF Mono - `-apple-system` is the hook the OS itself provides for them, and it picks
+# the right optical size (Display above ~20px, Text below) without being asked.
+#
+# SF is not licensed for redistribution and is not installed on Windows or Linux, so
+# the rest of each stack is what those machines have that is closest in proportion and
+# x-height: Segoe UI Variable, then Inter, then Roboto. Serving SF from a font CDN
+# would put the look on every machine and would also mean this page fetched something
+# from a third party on load, which contradicts what it says about itself two lines
+# down from the headline.
+FONT_UI = ('-apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", '
+           '"SF Pro", "Helvetica Neue", "Segoe UI Variable Text", "Segoe UI", '
+           'Inter, Roboto, Ubuntu, "Noto Sans", Arial, sans-serif')
+FONT_MONO = ('ui-monospace, "SF Mono", SFMono-Regular, Menlo, "JetBrains Mono", '
+             '"Cascadia Mono", Consolas, "Liberation Mono", monospace')
+
 CSS = f"""
 <style>
-/* Type: UI in the system sans, every number in a tabular monospace so columns of
-   coordinates and areas line up digit for digit. */
-[data-testid="stMetricValue"], [data-testid="stMetricDelta"],
-.stDataFrame, .stDataFrame div, code, pre, .mono {{
-  font-family: "SF Mono", "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+/* Type: Apple's system faces throughout, with every number in a tabular monospace so
+   columns of coordinates and areas line up digit for digit.
+
+   Streamlit sets its own family on almost every element it renders, so this has to
+   name them rather than rely on inheritance from `body`. */
+html, body, .stApp, [data-testid="stAppViewContainer"], [data-testid="stSidebar"],
+.block-container, .stMarkdown, .stMarkdown p, .stMarkdown li, .stMarkdown span,
+.stMarkdown div, .stMarkdown a, .stMarkdown strong, .stMarkdown em,
+p, li, label, button, input, optgroup, select, textarea,
+[data-testid="stWidgetLabel"], [data-testid="stCaptionContainer"],
+[data-testid="stFileUploaderDropzone"], [data-baseweb], [data-baseweb] * {{
+  font-family: {FONT_UI};
+}}
+/* Headings need the extra weight: Streamlit sets its own family on them through a
+   generated class, which outranks a bare `h1`. This is the one place the rule has to
+   insist - matching that specificity by hand would break the next time the class is
+   regenerated. */
+.stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6 {{
+  font-family: {FONT_UI} !important;
+}}
+/* Rendered the way the same faces are rendered on the platform they come from:
+   antialiased rather than subpixel, which is what keeps light text on a dark surface
+   from looking bolder and muddier than it is. */
+html, body, .stApp {{
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  font-synthesis-weight: none;
+}}
+
+/* Figures and file names stay monospaced. Every selector is prefixed so it outranks
+   the rule above - a bare `code` would lose to `.stMarkdown span`, and the `.gds` and
+   `.lyp` chips in the prose would quietly turn into body text. */
+.stApp [data-testid="stMetricValue"], .stApp [data-testid="stMetricDelta"],
+.stApp .stDataFrame, .stApp .stDataFrame div,
+.stApp code, .stApp pre, .stApp kbd, .stApp samp, .stApp .mono {{
+  font-family: {FONT_MONO};
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum" 1;
 }}
@@ -146,7 +194,7 @@ header[data-testid="stHeader"] {{ background: transparent; height: 0; }}
   display: inline-block; padding: 2px 9px; margin: 2px 6px 2px 0;
   border-radius: 999px; font-size: 0.71rem; border: 1px solid {BORDER};
   background: {SURFACE_2}; color: {MUTED};
-  font-family: "SF Mono", Menlo, monospace;
+  font-family: {FONT_MONO};
 }}
 .chip.exact {{ border-color: {OK}; color: {OK}; }}
 .chip.measured {{ border-color: {ACCENT}; color: {ACCENT}; }}
@@ -170,7 +218,7 @@ header[data-testid="stHeader"] {{ background: transparent; height: 0; }}
   padding: 1px 0 !important; min-height: 0 !important; gap: 6px !important;
 }}
 .layer-panel [data-testid="stCheckbox"] label p {{
-  font-family: "SF Mono", Menlo, monospace; font-size: 0.76rem !important;
+  font-family: {FONT_MONO}; font-size: 0.76rem !important;
   margin: 0 !important; line-height: 1.35 !important;
 }}
 .layer-panel [data-testid="stVerticalBlock"] {{ gap: 0 !important; }}
@@ -181,7 +229,7 @@ header[data-testid="stHeader"] {{ background: transparent; height: 0; }}
 }}
 .lp-row {{
   display: flex; align-items: center; gap: 7px;
-  font-family: "SF Mono", Menlo, monospace; font-size: 0.75rem;
+  font-family: {FONT_MONO}; font-size: 0.75rem;
   color: {TEXT}; padding: 1px 0;
 }}
 .lp-row .ld {{ color: {MUTED}; font-size: 0.68rem; }}
@@ -252,7 +300,7 @@ def style_figure(fig):
         template="plotly_dark",
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor=BG,
-        font=dict(family="SF Mono, Menlo, monospace", size=11, color=TEXT),
+        font=dict(family=FONT_MONO, size=11, color=TEXT),
         title=dict(font=dict(size=13, color=TEXT)),
         legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=10)),
         margin=dict(l=56, r=18, t=44, b=44),
