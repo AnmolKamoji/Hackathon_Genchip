@@ -1,22 +1,39 @@
+# What the dashboard needs to run.
+#
+#   python -m venv .venv
+#   .venv/bin/pip install -r requirements.txt        # Linux / macOS / WSL
+#   .venv\Scripts\pip install -r requirements.txt    # Windows
+#
+# Python 3.11 or newer. Verified on CPython 3.12.3; klayout publishes wheels for
+# 3.9-3.13, and that is the binding this whole project is built on, so the Python
+# version is effectively whatever it ships a wheel for.
+#
+# Tests, the answer-key verification and the browser checks are NOT here - they are
+# in requirements-dev.txt, so a machine that only runs the dashboard installs four
+# packages instead of nine.
+#
+# Upper bounds are on the majors that have broken this code before or that gate the
+# API being used. They are deliberate, not caution: streamlit 2 will change the
+# component protocol ui/viewer.py implements by hand, and pandas 3 changes the
+# copy-on-write semantics the section tables rely on.
+
+# The analysis engine. Every measurement in the app comes from here: geometry,
+# booleans, DRC checks, net extraction, device extraction and LVS. Nothing else in
+# this file reads a GDSII at run time.
+klayout>=0.30,<0.31
+
+# The dashboard. `ui/viewer.py` implements Streamlit's custom-component protocol by
+# hand against apiVersion 1, and `st.iframe` is used where it exists with a fallback
+# to the deprecated `components.v1.html`, so 1.45 is the floor and 2 is the ceiling.
 streamlit>=1.45,<2
-klayout>=0.30
+
+# Section tables. DataFrames only - no analysis is done with pandas.
 pandas>=2.2,<3
+
+# The density heat map and the 2.5D layer view. Plotly is used for those two figures
+# and nowhere else; the layout viewer is hand-written Canvas2D.
 plotly>=6,<7
+
+# Reads `.env` so ANTHROPIC_API_KEY never has to be exported by hand, and never has
+# to be written into a file that git tracks.
 python-dotenv>=1.0,<2
-
-# Primary AI backend. Only needed when ANTHROPIC_API_KEY is set; the dashboard
-# and every deterministic answer work without it.
-anthropic>=0.60
-
-# Test-only. `python -m pytest` is used in the setup walkthrough.
-pytest>=8
-
-# Verification-only. gdstk is a second, independent GDS reader, used by
-# tools/oracle.py to build the answer key that tools/judge.py grades against. It is
-# deliberately not KLayout: an answer key built with the same library as the analyzer
-# would confirm the analyzer's own mistakes. Nothing in app.py imports it.
-gdstk>=0.9
-
-# Optional legacy backend, used only when LLM_PROVIDER=openai. The local Ollama
-# fallback talks to its server over stdlib HTTP and needs no extra package.
-openai>=1.90,<2

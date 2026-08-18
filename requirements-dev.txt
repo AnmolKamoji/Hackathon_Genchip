@@ -1,0 +1,31 @@
+# Tests, verification and the offline tools. Not needed to run the dashboard.
+#
+#   .venv/bin/pip install -r requirements.txt -r requirements-dev.txt
+#   .venv/bin/python -m pytest -q
+#   .venv/bin/python -m playwright install chromium     # once, for the browser tests
+
+-r requirements.txt
+
+# The suite. 1189 tests, including AppTest runs that drive the real app.py.
+pytest>=8,<10
+
+# A second, independent GDS reader. `tools/oracle.py` builds the answer key with
+# gdstk and a plain XML parse of the .lyp, importing nothing from analyzer/, so a
+# passing grade in tools/judge.py means the answer agrees with a separately written
+# program rather than with the analyzer's own output. Choosing KLayout here would
+# have made the key confirm the analyzer's mistakes. Nothing in app.py imports it.
+gdstk>=0.9,<2
+
+# Browser tests: tests/test_viewer_browser.py drives the layout viewer in headless
+# Chromium, which is the only place the Canvas2D drawing and the JS-to-Python
+# component bridge can actually be checked. The browser itself is a separate
+# download - see the playwright install line above.
+playwright>=1.40,<2
+
+# Screenshot comparison in the judge tests.
+pillow>=10,<14
+
+# One-off: `tools/extract_drm_rules.py` transcribes the GENCHIP Design Rule Manual
+# into data/genchip_drm_rules.json. The manual is confidential and is not in this
+# repository, so this is only needed by someone re-running that transcription.
+pypdf>=4,<7

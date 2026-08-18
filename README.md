@@ -4,6 +4,17 @@ A ready-to-run hackathon prototype that turns a GDSII layout into deterministic 
 
 Every number shown comes from a deterministic parser. The language model only rephrases metadata it is given; it never counts, measures or infers a geometry fact.
 
+## Documentation
+
+| File | What is in it |
+|---|---|
+| `README.md` | this file: what it is, how to install it, how to run it, what it cannot do |
+| [CAPABILITIES.md](CAPABILITIES.md) | every question the tool answers, and every one it refuses, with the reason |
+| `requirements.txt` / `-dev` / `-ai` | dependencies, each line saying why it is there |
+| `build/question_key/` | the answer key: 169 questions across 5 layouts, with expected answers |
+| `build/comparison_qa/` | 38 comparison questions with the answers the tool actually gives |
+| `data/samples/` | five real standard cells, the technology `.lyp`, and the connection stack |
+
 ## What it does
 
 - Upload one or two `.gds` files.
@@ -14,6 +25,11 @@ Every number shown comes from a deterministic parser. The language model only re
 - Generate an AI design-review narrative.
 - Compare two GDS files with layer-by-layer deltas, including layers added and removed.
 - Analyse **physical connectivity** in three honestly-labelled tiers (see below), because a net graph needs information a `.gds` does not contain.
+- Draw both layouts in an interactive viewer, side by side under one shared layer panel, with an A+B / XOR overlay.
+- Open either view full screen with the chatbot beside it, and **edit** a layout there - draw, move, reshape, delete - then write a new GDSII.
+- Run ten tools from the viewer's own menu: Technology, DRC, LVS, Netlist, Parasitics, 2.5D view, Density map, Diff, Browse shapes, Browse instances.
+
+See [CAPABILITIES.md](CAPABILITIES.md) for what each of those answers and, more importantly, what it refuses to answer.
 
 ## Design rule checking needs the manual, which is not in this repository
 
@@ -96,6 +112,68 @@ to: reading a name ending in `CON` as a contact is right for most technologies a
 wrong for this one, where `NDIFFCON` is the sidecar's `NMOSInterconnect` — a local
 interconnect conductor. Treating it as a contact shorted a whole cell into one net.
 
+## The review surface
+
+Six sections, in the order a review happens. Each reads one of two documents - a
+`FileAnalysisDocument` per file, or the single `ComparisonDocument` for the chosen pair
+- and none recalculates a value that already exists in one, which is what stops two
+sections disagreeing about the same metric.
+
+| Section | Answers |
+|---|---|
+| GDS Summary | one row per file: layers, vias, pins, transistors, size, polygons |
+| Inspect File | per file: geometry, the layer table, tech parameters, pitch, rule results, and the interactive viewer |
+| GDS Comparison | A and B side by side under one shared layer panel, the XOR summary, the region browser, and the A+B overlay |
+| Revision Analysis | what kind of change this is, and which masks it touches |
+| Change List | every difference, largest first |
+| Ask the Layout | the chat |
+
+### The viewer, the workspace and the editor
+
+Each viewer is a hand-written Canvas2D drawing - not a plot - so zoom, pan and layer
+toggles never reach Python and never trigger a rerun. Both comparison halves share one
+layer panel: a checkbox hides that layer in both drawings at once, while zoom and pan
+stay per-drawing.
+
+**⤢ Expand** on any layout, on the comparison, or on the overlay opens it full screen
+with the chatbot beside it. In the expanded layout view, **Edit layout** turns on
+drawing, moving, reshaping and deleting. Committed edits are applied with KLayout
+**atomically into a new file** - the upload is never modified - and every check on the
+page is then re-run against what was written. Download it, or revert to the upload.
+
+### The ten tools
+
+They live in the viewer's own **More tools** menu rather than in a section of their
+own, and each opens under the viewer that asked for it. Each states what it needs and
+refuses to guess:
+
+| Tool | Needs | Gives |
+|---|---|---|
+| Technology | nothing | what is loaded and what each further input would unlock |
+| DRC | nothing, or your own deck | the bundled catalogue's results; any technology via a JSON deck |
+| LVS | a SPICE/CDL netlist | device, net and pin pairing against the schematic |
+| Netlist | nothing | extracted devices and nets, with a SPICE export |
+| Parasitics | nothing, or process constants | lengths, widths, coupling runs, via counts; ohms and farads once given an ITF-style JSON |
+| 2.5D view | a layer stack (elevation, thickness) | the layout as slabs |
+| Density map | nothing | windowed coverage per layer |
+| Diff | two files | structural diff: cells, shapes, instances, texts |
+| Browse shapes | nothing | every shape with its own measurements |
+| Browse instances | nothing | every placement with its transform |
+
+### How a question is routed
+
+The chat answers deterministically first and hands to a model only when nothing local
+claims the question. Routing is by **intent**, not by what happens to be available: a
+comparison question goes to the pair, a question about one layout goes to that layout's
+measurements even with two files open. Getting that backwards is the failure that looks
+most like success - "what is the gate pitch?" answered "unchanged at 45 nm" states the
+right number and does not answer the question.
+
+Layer and parameter names are matched on their letters and digits alone, so `P-VIAT`,
+`p-viat`, `p viat`, `pviat` and `p_viat` are one layer. When nothing matches and no
+model is reachable, the reply is still drawn from the measurements that bear on the
+question - never a message about our configuration.
+
 ## The three analysis modes
 
 | Mode | Input | Geometry (area, density, cell size) | Semantics (layer names, vias) |
@@ -150,9 +228,24 @@ labelled with its source.
 
 Both report top structure `NR2D1`. Revision 2 adds an `M1` metal layer plus the `VIA_M0_M1` and `VIA_M0_PMOSInterconnect` vias that reach it, which makes them a good comparison demo.
 
-## 1. Windows setup
+## 1. Install
 
-Use Python 3.11 or 3.12.
+Python 3.11 or newer. Verified on CPython 3.12.3.
+
+Dependencies come in three files, so a machine that only runs the dashboard installs
+five packages rather than twelve:
+
+| File | What it is for | Needed? |
+|---|---|---|
+| `requirements.txt` | klayout, streamlit, pandas, plotly, python-dotenv | **yes** - the app |
+| `requirements-dev.txt` | pytest, gdstk, playwright, pillow, pypdf | to run the tests |
+| `requirements-ai.txt` | anthropic, openai | only for model-written prose |
+
+Every number in the dashboard is measured locally, so the app is fully usable with
+`requirements.txt` alone - that combination is installed into a clean virtualenv and
+exercised end to end as part of verifying a release.
+
+**Windows**
 
 ```powershell
 py -3.12 -m venv .venv
@@ -161,11 +254,15 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-If PowerShell blocks activation:
+**Linux / macOS / WSL**
 
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass
+```bash
+python3 -m venv .venv
+.venv/bin/pip install --upgrade pip
+.venv/bin/pip install -r requirements.txt
 ```
+
+If PowerShell blocks activation, `Set-ExecutionPolicy -Scope Process Bypass`.
 
 Verify KLayout:
 
@@ -288,9 +385,31 @@ Do not commit `.env`.
 
 ## 3. Run the tests
 
-```powershell
-python -m pytest
+```bash
+.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/python -m pytest -q
 ```
+
+1189 tests. They include AppTest runs that drive the real `app.py`, so a page that
+raises on load fails here rather than in a demo.
+
+The browser tests need Chromium, which is a separate download:
+
+```bash
+.venv/bin/python -m playwright install chromium
+```
+
+Two verification passes live outside the suite and are worth knowing about:
+
+```bash
+.venv/bin/python tools/judge.py --gds data/samples/DCAP0_1_RT_4.gds   # grade the answers
+.venv/bin/python tools/export_comparison_qa.py                        # regenerate the Q&A
+```
+
+`tools/judge.py` grades the app's answers against a key built by `tools/oracle.py`,
+which reads the layout with **gdstk** and parses the `.lyp` itself, importing nothing
+from `analyzer/`. A passing grade therefore means the answer agrees with a separately
+written program, not that the analyzer agrees with itself.
 
 ## 4. CLI analysis
 
@@ -328,11 +447,15 @@ connectivity: 60 conducting shapes -> 54 within-layer conductors (exact, GDS-onl
 
 ## 5. Run the dashboard
 
-```powershell
-streamlit run app.py
+```bash
+.venv/bin/python -m streamlit run app.py
 ```
 
-Open the local URL shown in the terminal.
+Open the local URL shown in the terminal - `http://localhost:8501` by default. Add
+`--server.port 3000` if that port is taken by something else.
+
+You land on a page that states what the tool does, over a background drawn from the
+sample layouts' own geometry. Drop in one `.gds` and the review surface replaces it.
 
 ## Architecture
 
@@ -355,6 +478,37 @@ JSON sidecar -> sidecar parser -----> technology semantics
 ```
 
 The LLM is explicitly instructed never to calculate or invent GDS facts, and that a `null` field means *unavailable*, not zero.
+
+### Where the code lives
+
+```text
+app.py                  the page: orchestrates, renders nothing itself
+analyzer/               every measurement. KLayout only lives here
+  document.py             builds one FileAnalysisDocument per file
+  compare_engine.py       builds the single ComparisonDocument
+  measurements.py         per-layer geometry; shape outlines for the viewer
+  connectivity.py         the net graph, and the stack that makes it possible
+  netlist.py  lvs.py      device extraction, and comparison against a schematic
+  drc.py  deck.py         the bundled rule catalogue, and user-supplied decks
+  parasitics.py           the layout half of R and C
+  edit.py                 the edit journal: applies operations, atomically
+  density.py  diff.py  stack3d.py  pitch.py  classify.py  techparams.py
+ui/
+  theme.py                colour and type tokens, and the stylesheet
+  landing.py              the landing page and its background
+  viewer.js / .css        the Canvas2D layout viewer (no Python round trips)
+  editor.js               the drawing tools layered onto it
+  viewer.py               mounts the viewer, by hand, as a Streamlit component
+  workspace.py            the panels, the expanded view, the editor
+  sections/               one module per section; tools.py holds the tool bench
+ai/
+  deterministic.py        answers about one layout, from measurements
+  compare.py              answers about a pair
+  llm.py  prompts.py      the model backends, and what they are told
+models/metadata.py      the schema every document is validated against
+tools/                  offline: oracle, judge, factcheck, exports
+tests/                  1189 tests, including AppTest runs of the real page
+```
 
 ## Important limitations
 

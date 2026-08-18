@@ -1,0 +1,17 @@
+# Optional: the model backends. Every number in the dashboard is computed locally and
+# every deterministic answer works without any of this - the model only rephrases
+# measurements it was handed, and when it is absent the chat falls back to answering
+# from the same measurements. See "Why accuracy does not depend on the model" in the
+# README.
+#
+#   .venv/bin/pip install -r requirements-ai.txt
+#
+# Both SDKs are imported inside the functions that call them, not at module import,
+# so the app starts and runs with neither installed.
+
+# The primary backend, used when ANTHROPIC_API_KEY is set.
+anthropic>=0.60,<1
+
+# Only used when LLM_PROVIDER=openai. The Ollama fallback needs nothing here: it
+# talks to a local server over stdlib HTTP.
+openai>=1.90,<2
